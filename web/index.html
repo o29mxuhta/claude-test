@@ -244,12 +244,21 @@ body.panel-open #timeline-btn, body.driving #timeline-btn { display: none !impor
   display: none;
   position: fixed;
   z-index: 1010;
-  background: #f7f7f5;
-  box-shadow: 0 -2px 12px rgba(0,0,0,0.15);
   direction: rtl;
   flex-direction: column;
-  transition: transform 0.28s ease;
+  /* Card geometry animates too — the panel resizes between slim and full. */
+  transition: transform 0.28s ease, opacity 0.22s ease, height 0.28s ease;
   padding-bottom: env(safe-area-inset-bottom, 0px);
+  /* background / border / shadow live in the surface block near the end of the
+     stylesheet, so the two are never edited out of sync. */
+}
+/* Arrive rather than snap. Opacity only: the map beneath must never be hidden
+   by a transform mid-flight during an alert. */
+@keyframes up-panel-in { from { opacity: 0; } to { opacity: 1; } }
+#unified-panel.slim, #unified-panel.full { animation: up-panel-in 0.22s ease both; }
+@media (prefers-reduced-motion: reduce) {
+  #unified-panel { transition: none; }
+  #unified-panel.slim, #unified-panel.full { animation: none; }
 }
 
 /* Visibility flags based on panel state */
@@ -448,17 +457,21 @@ body.f-ellipse #ellipse-stub { display: block !important; }
    8. RESPONSIVE DESIGN: DESKTOP OVERRIDES
 ========================================= */
 @media (min-width: 601px) {
-  /* Full-Height Right Sidebar Geometry */
+  /* Floating card, inset from the viewport edges.
+     Was a full-bleed 380px slab pinned to top/right/bottom: it read as a wall
+     rather than an object, and any polygon beneath it was sliced clean in half
+     with no visual cue that the map continued underneath. */
   #unified-panel.slim, #unified-panel.full {
     display: flex;
-    top: 0;             
-    right: 0;           
-    bottom: 0;          
+    top: 14px;
+    right: 14px;
+    bottom: 14px;
     left: auto;
-    width: 380px;       
-    height: 100vh;
-    max-height: 100vh;
-    border-radius: 0;   
+    width: 336px;
+    height: auto;
+    max-height: none;
+    border-radius: 18px;
+    overflow: hidden;
   }
   #unified-panel.full #up-handle { display: none; }
   #up-location { padding-top: 15px; }
@@ -488,7 +501,7 @@ body.dark .menu-visitors-sub { color: #999; }
 body.dark #historyTimeLabel { color: #999 !important; border-top-color: #4a4c50 !important; }
 body.dark #errorDetail { background: #30323a; color: #ddd; border-color: #c00; }
 body.dark #legend { background: rgba(48,50,56,0.92); color: #ddd; }
-body.dark #unified-panel { background: #2e3038; }
+/* Panel surface is defined once, below the frosted-glass block. */
 body.dark #up-location-name { color: #eee; }
 body.dark .up-event-row:hover { background: #3a3c40; }
 body.dark .up-event-row.up-current { background: rgba(59,130,246,0.15); }
@@ -562,7 +575,10 @@ body.dark #up-location-pop { color: #999; }
 }
 
 /* 🪟 Premium Frosted Glass UI (Must be last to override everything) */
-#status, #unified-panel, #menu-panel, #timeline-btn, #legend {
+/* #unified-panel is deliberately absent — it gets its own tuned surface in
+   section 8 (desktop) / the mobile sheet rules. Reinstating it here would
+   restore the opaque full-bleed wall that covered selected polygons. */
+#status, #menu-panel, #timeline-btn, #legend {
   background: rgba(255, 255, 255, 0.70) !important;
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
@@ -570,10 +586,36 @@ body.dark #up-location-pop { color: #999; }
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1) !important;
 }
 
-body.dark #status, body.dark #unified-panel, body.dark #menu-panel, body.dark #timeline-btn, body.dark #legend {
+body.dark #status, body.dark #menu-panel, body.dark #timeline-btn, body.dark #legend {
   background: rgba(30, 32, 38, 0.65) !important;
   border: 1px solid rgba(255, 255, 255, 0.08) !important;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3) !important;
+}
+
+/* ── Events panel surface ─────────────────────────────────────────────────
+   This panel floats over a map whose entire semantic language is saturated
+   colour: red rockets, purple aircraft, brown infiltration, yellow pre-alert.
+   A neutral blur would let a red polygon bleed through as a red wash and let
+   the panel counterfeit an alert it does not own, so the backdrop is drained
+   with saturate() below 1 before it is blurred. Hue behind the glass is
+   therefore never meaningful — only the map itself carries alert colour. */
+#unified-panel {
+  background: rgba(247, 247, 245, 0.82);
+  -webkit-backdrop-filter: blur(22px) saturate(0.5);
+  backdrop-filter: blur(22px) saturate(0.5);
+  border: 1px solid rgba(0, 0, 0, 0.07);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+body.dark #unified-panel {
+  background: rgba(24, 26, 32, 0.80);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.46), 0 2px 8px rgba(0, 0, 0, 0.30);
+}
+/* Without backdrop-filter this is a see-through box with unreadable text over
+   a busy map. Legibility outranks the effect — fall back to near-opaque. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  #unified-panel { background: rgba(247, 247, 245, 0.97); }
+  body.dark #unified-panel { background: rgba(24, 26, 32, 0.97); }
 }
     
 /* Force ALL Status Box Text to Black in Light Mode */
@@ -3676,6 +3718,43 @@ function openFullPanel(name) {
     } else {
       requestAnimationFrame(function() { _scrollSyncLock = false; });
     }
+
+    // Clicking a polygon opens the panel without moving the map, so a city near
+    // the right edge ends up behind the panel. Pan it clear — pan only, never
+    // zoom: during an alert the user must not lose their frame of reference.
+    requestAnimationFrame(function() { nudgeIntoView(name); });
+  }
+
+  function nudgeIntoView(name) {
+    // The search path fits bounds with panel-aware padding; nudging as well
+    // would fight that animation.
+    if (isZoomingProgrammatically) return;
+    if (!map || !featureMap || !featureMap[name]) return;
+
+    var panel = document.getElementById('unified-panel');
+    if (!panel) return;
+    if (!panel.classList.contains('slim') && !panel.classList.contains('full')) return;
+    var pr = panel.getBoundingClientRect();
+    if (!pr.width || !pr.height) return;
+
+    var bounds;
+    try { bounds = featureBounds(featureMap[name]); } catch (e) { return; }
+    if (!bounds) return;
+
+    var pt;
+    try { pt = map.project(bounds.getCenter()); } catch (e) { return; }
+    if (!pt) return;
+
+    var GAP = 40;              // keep the polygon this clear of the panel edge
+    var dx = 0, dy = 0;
+    if (window.matchMedia('(min-width: 601px)').matches) {
+      if (pt.x > pr.left - GAP) dx = pt.x - (pr.left / 2);
+    } else {
+      if (pt.y > pr.top - GAP) dy = pt.y - (pr.top / 2);
+    }
+    if (!dx && !dy) return;    // already in open map — leave the camera alone
+
+    map.panBy([dx, dy], { duration: 420, essential: true });
   }
 
 function deselectLocation() {
@@ -4219,11 +4298,44 @@ function expandAndResolveLocations(rawLocations) {
     return allBounds;
   }
 
+  // The events panel floats over the right edge of the map on desktop, and over
+  // the bottom on mobile. fitBounds() with a uniform padding centres a location
+  // in the *viewport*, so a selected city lands underneath the panel and is
+  // clipped in half. Feed the panel's real measured footprint back in as
+  // asymmetric padding so the target always settles in open map.
+  function getMapPadding(base) {
+    base = (typeof base === 'number') ? base : 40;
+    var pad = { top: base, bottom: base, left: base, right: base };
+    var panel = document.getElementById('unified-panel');
+    if (!panel) return pad;
+    // Only .slim / .full are on-screen; the bare element is display:none.
+    if (!panel.classList.contains('slim') && !panel.classList.contains('full')) return pad;
+    var r = panel.getBoundingClientRect();
+    if (!r.width || !r.height) return pad;
+
+    var canvas = (typeof map !== 'undefined' && map.getCanvas) ? map.getCanvas() : null;
+    var w = (canvas && canvas.clientWidth) || window.innerWidth || 0;
+    var h = (canvas && canvas.clientHeight) || window.innerHeight || 0;
+
+    if (window.matchMedia('(min-width: 601px)').matches) {
+      pad.right = r.width + 28;   // card width + its inset + a breathing gap
+    } else {
+      pad.bottom = r.height + 16;
+    }
+
+    // MapLibre throws if padding leaves no room to draw. Keep a floor of 120px
+    // of usable map on each axis and give up the extra padding instead.
+    if (w && pad.left + pad.right > w - 120) pad.right = Math.max(0, w - 120 - pad.left);
+    if (h && pad.top + pad.bottom > h - 120) pad.bottom = Math.max(0, h - 120 - pad.top);
+    return pad;
+  }
+  try { window.getMapPadding = getMapPadding; } catch (e) {}
+
   function maybeZoomToEvent() {
     var bounds = getActiveEventBounds();
     if (!bounds) return;
     isZoomingProgrammatically = true;
-    map.fitBounds(bounds, { padding: 80, maxZoom: 10 });
+    map.fitBounds(bounds, { padding: getMapPadding(80), maxZoom: 10 });
   }
 
   // --- Status indicator ---
@@ -5503,7 +5615,7 @@ function processEntries(entries) {
               }
             };
             map.on('moveend', playFlyHandler);
-            map.fitBounds(bounds, { padding: 80, maxZoom: 10 });
+            map.fitBounds(bounds, { padding: getMapPadding(80), maxZoom: 10 });
             return;
           }
         }
@@ -5923,13 +6035,19 @@ function startHeartbeat() {
     closeMenu();
     popPanelHistory();
 
-    var bounds = featureBounds(feature);
+    // Open the panel *before* moving the camera. getMapPadding() measures the
+    // live element, so opening it afterwards meant the city was centred in the
+    // full viewport and the panel then dropped on top of it. Setting the
+    // programmatic flag first also suppresses nudgeIntoView(), which would
+    // otherwise pan once here and again on fitBounds.
     isZoomingProgrammatically = true;
-    map.fitBounds(bounds, { padding: 80, maxZoom: 12 });
+    openLocationPanel(name);
+
+    var bounds = featureBounds(feature);
+    map.fitBounds(bounds, { padding: getMapPadding(80), maxZoom: 12 });
 
     map.once('moveend', function() {
       isZoomingProgrammatically = false;
-      openLocationPanel(name);
     });
   });
 
