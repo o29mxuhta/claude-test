@@ -1789,7 +1789,7 @@ function ensureAlertLayers() {
     // Re-add your layers...
     map.addLayer({ id: 'alerts-fill', type: 'fill', source: 'alerts-source', paint: { 'fill-color': ['coalesce', ['feature-state', 'fillColor'], '#888888'], 'fill-opacity': ['coalesce', ['feature-state', 'fillOpacity'], 0.01] } });
     map.addLayer({ id: 'alerts-hit', type: 'fill', source: 'alerts-source', paint: { 'fill-color': 'transparent' } });
-    map.addLayer({ id: 'alerts-borders', type: 'line', source: 'alerts-source', paint: { 'line-color': '#9ca3af', 'line-width': 0.4, 'line-opacity': 0.25, 'line-dasharray': [2, 2] } });
+    map.addLayer({ id: 'alerts-borders', type: 'line', source: 'alerts-source', paint: alertsBorderPaint() });
     map.addLayer({ id: 'alerts-glow', type: 'line', source: 'alerts-source', paint: { 'line-color': ['coalesce', ['feature-state', 'lineColor'], 'transparent'], 'line-opacity': ['coalesce', ['feature-state', 'lineOpacity'], 0], 'line-width': 8, 'line-blur': 6 } });
     map.addLayer({ id: 'alerts-stroke', type: 'line', source: 'alerts-source', paint: { 'line-color': ['coalesce', ['feature-state', 'lineColor'], '#aaaaaa'], 'line-opacity': ['coalesce', ['feature-state', 'lineOpacity'], 0], 'line-width': 1.5 } });
     
@@ -6263,6 +6263,48 @@ function startHeartbeat() {
   }
 
 // --- Global Helper Functions ---
+
+// Neutral city outlines.
+//
+// This layer is the ONLY thing marking a city when nothing is happening:
+// unalerted polygons sit at fill-opacity 0.01, so without a border a quiet map
+// shows no city boundaries at all. It used to be a 0.4px dashed line at 0.25
+// opacity, which at that size reads as noise rather than structure.
+//
+// The colour is grey on purpose and must stay grey. Every other colour on this
+// map belongs to the alert vocabulary (red rockets, purple aircraft, brown
+// infiltration, yellow pre-alert), so an outline tinted toward any hue would
+// announce a state the city does not have.
+//
+// The outline also does not react to alerts - it stays the same constant grey
+// under a lit polygon. The alert colour arrives on top via alerts-glow and
+// alerts-stroke, both of which are added after this layer and so paint over it.
+//
+// Width and opacity are zoom-interpolated because roughly 1,450 polygons share
+// this one layer. A width that reads cleanly when zoomed into a city turns the
+// whole country into grey hatching at DEFAULT_ZOOM (7.2), where those polygons
+// are only a few pixels apart - so the country view stays a hairline and the
+// line firms up only once there is open space between borders.
+function alertsBorderPaint() {
+    // Recomputed on every call rather than cached: addAlertLayers() re-runs from
+    // the style.load handler, which is exactly the moment the theme has flipped.
+    //
+    // isDarkActive is in scope here (verified, not assumed). The typeof guard is
+    // for the future, not the present: a ReferenceError thrown here would abort
+    // addAlertLayers() partway and leave the map with no alert layers at all. A
+    // wrong-but-grey outline is a cosmetic bug; a missing alerts-fill is a blank
+    // map during an attack. Degrade, never throw.
+    var dark = (typeof isDarkActive !== 'undefined') && isDarkActive;
+
+    return {
+        // Mid grey on the light basemap; lifted on dark, where a #6b7280 hairline
+        // disappears into the background entirely.
+        'line-color': dark ? '#aab3c0' : '#6b7280',
+        'line-width':   ['interpolate', ['linear'], ['zoom'], 6, 0.5,  8, 0.8,  11, 1.2],
+        'line-opacity': ['interpolate', ['linear'], ['zoom'], 6, 0.28, 8, 0.45, 11, 0.6]
+    };
+}
+
 function addAlertLayers() {
     if (map.getSource('alerts-source')) return; 
 
@@ -6280,7 +6322,7 @@ function addAlertLayers() {
     // 2. Borders
     map.addLayer({
         id: 'alerts-borders', type: 'line', source: 'alerts-source',
-        paint: { 'line-color': '#9ca3af', 'line-width': 0.4, 'line-opacity': 0.25, 'line-dasharray': [2, 2] }
+        paint: alertsBorderPaint()
     });
 
     // 3. Glow and Stroke
