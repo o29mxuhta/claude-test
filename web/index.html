@@ -336,15 +336,25 @@ body.panel-open #timeline-btn, body.driving #timeline-btn { display: none !impor
 /* =========================================
    6. HAMBURGER MENU & MODALS
 ========================================= */
+/* Menu button lives in the left rail, stacked under the map zoom/reset controls.
+   It used to sit at top-right, where it overlapped the events panel card (the
+   button is z-index 9999, the panel 1010, so it floated on top of the panel's
+   own corner). --menu-btn-top is measured from the live control group by
+   positionMenuButton(); the literal here is only the pre-measurement fallback,
+   because the control group's button count is built at runtime. */
 #menu-btn {
-  position: fixed !important; top: 14px !important; right: 14px !important; bottom: auto !important; z-index: 9999 !important;
+  position: fixed !important; top: var(--menu-btn-top, 182px) !important;
+  left: 10px !important; right: auto !important; bottom: auto !important; z-index: 9999 !important;
   background: rgba(255,255,255,0.92); border: 1px solid #ccc; border-radius: 50%; width: 40px; height: 40px;
   display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.2); color: #555; padding: 0;
 }
+/* The panel follows the button down the left rail rather than staying pinned
+   top-right, so the two never read as unrelated controls. */
 #menu-panel {
-  display: none; position: fixed !important; top: 60px !important; right: 14px !important; bottom: auto !important; z-index: 9998 !important;
+  display: none; position: fixed !important; top: var(--menu-panel-top, 230px) !important;
+  left: 10px !important; right: auto !important; bottom: auto !important; z-index: 9998 !important;
   background: rgba(255,255,255,0.97); border: 1px solid #ccc; border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.2); direction: rtl;
-  width: 320px; max-width: calc(100vw - 28px); max-height: calc(100vh - 80px); overflow-y: auto;
+  width: 320px; max-width: calc(100vw - 28px); max-height: calc(100vh - var(--menu-panel-top, 230px) - 20px); overflow-y: auto;
 }
 .menu-item { border-bottom: 1px solid #f0f0f0; }
 .menu-item:last-child { border-bottom: none; }
@@ -419,8 +429,9 @@ body.f-ellipse #ellipse-stub { display: block !important; }
   #legend span, #legend div, #legend i { font-size: 12px !important; }
   #legend .dot { width: 12px; height: 12px; }
    
-  #menu-btn { width: 36px; height: 36px; }
-  #menu-panel { top: 50px; right: 12px; left: 10px; width: calc(100vw - 24px); max-width: none; max-height: calc(100dvh - 100px); border-radius: 16px; box-shadow: 0 8px 32px rgba(0,0,0,0.3); overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; padding-bottom: calc(20px + env(safe-area-inset-bottom)); }
+  /* Align with the 6px left inset the map controls use on mobile. */
+  #menu-btn { width: 36px; height: 36px; left: 6px !important; }
+  #menu-panel { top: var(--menu-panel-top, 220px) !important; left: 6px !important; right: auto !important; width: calc(100vw - 24px); max-width: none; max-height: calc(100dvh - var(--menu-panel-top, 220px) - 24px); border-radius: 16px; box-shadow: 0 8px 32px rgba(0,0,0,0.3); overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; padding-bottom: calc(20px + env(safe-area-inset-bottom)); }
   .menu-item-label { white-space: normal; line-height: 1.2; padding-left: 8px; }
   .menu-item-row { padding: 14px 16px; }
   
@@ -1695,6 +1706,7 @@ map.on('load', function() {
     // 1. Initial layer creation & Buttons
     addAlertLayers();
     rebuildMapButtons();
+    watchMenuButtonPosition();
    setupInteractionHandler();
    
     function renderNeonBreathing(timestamp) {
@@ -6292,6 +6304,46 @@ function rebuildMapButtons() {
 
     navGroup.appendChild(resetBtn);
     /*navGroup.appendChild(themeBtn);*/
+
+    // The menu button hangs off the bottom of this group, and the group's height
+    // just changed.
+    positionMenuButton();
+}
+
+// Park the menu button directly under the map controls in the left rail.
+// The control stack is assembled at runtime (NavigationControl's two buttons
+// plus whatever rebuildMapButtons() appends — the theme button is currently
+// commented out, so the count is 3 today and 4 the moment someone uncomments
+// it). Hard-coding a top offset would silently overlap the moment that changes,
+// so measure the rendered group instead and publish the result as a CSS var.
+function positionMenuButton() {
+    var ctrls = document.querySelector('.maplibregl-ctrl-top-left');
+    var btn = document.getElementById('menu-btn');
+    if (!ctrls || !btn) return;
+
+    var r = ctrls.getBoundingClientRect();
+    // Before the controls render this is a zero-height box; bailing leaves the
+    // CSS fallback in place rather than stacking the button at the viewport top.
+    if (!r.height) return;
+
+    var GAP = 10;
+    var top = Math.round(r.bottom + GAP);
+    var root = document.documentElement;
+    root.style.setProperty('--menu-btn-top', top + 'px');
+    root.style.setProperty('--menu-panel-top', (top + btn.offsetHeight + 8) + 'px');
+}
+
+// Re-measure whenever the control stack changes size. ResizeObserver catches
+// button add/remove; resize + orientationchange catch the mobile breakpoint,
+// which moves the whole rail.
+function watchMenuButtonPosition() {
+    positionMenuButton();
+    var ctrls = document.querySelector('.maplibregl-ctrl-top-left');
+    if (ctrls && typeof ResizeObserver !== 'undefined') {
+        try { new ResizeObserver(positionMenuButton).observe(ctrls); } catch (e) {}
+    }
+    window.addEventListener('resize', positionMenuButton);
+    window.addEventListener('orientationchange', positionMenuButton);
 }
 
 // --- CENTRALIZED INTERACTION MANAGER ---
