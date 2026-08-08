@@ -6297,11 +6297,19 @@ function alertsBorderPaint() {
     var dark = (typeof isDarkActive !== 'undefined') && isDarkActive;
 
     return {
-        // Mid grey on the light basemap; lifted on dark, where a #6b7280 hairline
-        // disappears into the background entirely.
-        'line-color': dark ? '#aab3c0' : '#6b7280',
-        'line-width':   ['interpolate', ['linear'], ['zoom'], 6, 0.5,  8, 0.8,  11, 1.2],
-        'line-opacity': ['interpolate', ['linear'], ['zoom'], 6, 0.28, 8, 0.45, 11, 0.6]
+        // Light grey, and deliberately lighter than it "should" be: the perceived
+        // weight of this layer comes from its density, not from any one line.
+        // Dark mode lifts rather than darkens, for contrast against the basemap.
+        'line-color': dark ? '#8f9aa8' : '#9ca3af',
+        // Tuned down from a first pass that read as bold. Watch the product of
+        // width x opacity, not either alone - that is the ink on screen. The
+        // original dashed [2,2] line drew only half its length, so its true
+        // weight was 0.4 x 0.25 x 0.5 = 0.05, not 0.10; solid lines here are
+        // worth roughly double their arithmetic.
+        // Country view (z7.2) now lands near 0.11 - about 2x the old line rather
+        // than 5x, still continuous instead of speckled.
+        'line-width':   ['interpolate', ['linear'], ['zoom'], 6, 0.35, 8, 0.6,  11, 0.9],
+        'line-opacity': ['interpolate', ['linear'], ['zoom'], 6, 0.15, 8, 0.26, 11, 0.4]
     };
 }
 
