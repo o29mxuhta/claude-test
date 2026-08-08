@@ -4,7 +4,7 @@ cd "$(dirname "$0")"
 
 # 1. Ensure the project exists (Run this once, or use --skip-confirmation)
 # You only need this command once. After it is created, you can comment this line out.
-npx wrangler pages project create reddev --production-branch main || true
+npx wrangler pages project create claude-test --production-branch main || true
 
 # 2. Deploy your project
 npx wrangler pages deploy web/ --project-name claude-test
