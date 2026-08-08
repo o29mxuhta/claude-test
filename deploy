@@ -7,4 +7,4 @@ cd "$(dirname "$0")"
 npx wrangler pages project create reddev --production-branch main || true
 
 # 2. Deploy your project
-npx wrangler pages deploy web/ --project-name reddev
+npx wrangler pages deploy web/ --project-name claude-test
