@@ -2768,15 +2768,128 @@ function todayDateStr() {
     return latlng[0] >= 29.4 && latlng[0] <= 33.4 && latlng[1] >= 34.2 && latlng[1] <= 35.9;
   }
 
-  // Normalize Hebrew geresh/gershayim (׳/״) to ASCII apostrophes to match geo lookup keys
+  // --- Location name normalization -------------------------------------------
+  //
+  // Oref location strings and our polygon keys name the same places but do not
+  // always agree byte-for-byte. Observed and defended-against differences:
+  //
+  //   * Bidi control marks (RLM/LRM/isolates) wrapping or splitting the name.
+  //     They are invisible and are NOT matched by \s, so when present they
+  //     broke essentially every lookup.
+  //   * Geresh/gershayim: ASCII ' and '' vs Hebrew ׳/״. The API used
+  //     the Hebrew forms for several days in March 2026 (docs/oref-sources.md)
+  //     and may do so again.
+  //   * Hyphens: ASCII -, Hebrew maqaf ־, and the ‐..― / −
+  //     dash family, with or without surrounding spaces.
+  //   * NBSP and other exotic spaces, and doubled spaces.
+  //
+  // normalizeName() folds all of that into one canonical display form.
+  // foldName() goes further and drops every separator, giving a key that is
+  // insensitive to spacing, dashes, commas and quotes.
+
+  // Bidi/zero-width controls: ZWSP..RLM, ALM, embeddings/overrides, isolates, BOM.
+  var BIDI_MARKS_RE = /[​-‏؜‪-‮⁦-⁩﻿]/g;
+  // Hebrew maqaf, the general-punctuation dash family, minus sign, compat hyphens.
+  var DASH_RE = /[־‐-―−﹘﹣－]/g;
+  // NBSP, NNBSP, en/em spaces and friends.
+  var ODD_SPACE_RE = /[   -   　]/g;
+
+  function normalizeName(s) {
+    if (s === null || s === undefined) return '';
+    var out = String(s);
+    if (out.normalize) out = out.normalize('NFC');
+    return out
+      .replace(BIDI_MARKS_RE, '')
+      .replace(DASH_RE, '-')
+      .replace(ODD_SPACE_RE, ' ')
+      .replace(/״/g, "''")
+      .replace(/[“”]/g, "''")
+      .replace(/׳/g, "'")
+      .replace(/[‘’]/g, "'")
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  // Aggressive fold: canonical form with every separator removed.
+  function foldName(s) {
+    return normalizeName(s).replace(/[-\s,."']/g, '');
+  }
+
+  // Legacy alias. No in-tree callers remain, but the old name is kept because
+  // it was the only normalizer for a long time — anything reintroduced from an
+  // older revision keeps working, and gets the full normalization for free.
   function normalizeGeresh(s) {
-    return s.replace(/\u05F4/g, "''").replace(/\u05F3/g, "'");
+    return normalizeName(s);
+  }
+
+  // --- Name index -------------------------------------------------------------
+  //   nameIndex.exact : folded name      -> [polygon key, ...]
+  //   nameIndex.base  : folded base city -> [polygon key, ...]
+  var nameIndex = { exact: {}, base: {}, zone: {} };
+
+  function indexPush(bucket, key, value) {
+    if (!key) return;
+    var list = bucket[key] || (bucket[key] = []);
+    if (list.indexOf(value) === -1) list.push(value);
+  }
+
+  function buildNameIndex(polygonNames, citiesData) {
+    var exact = {}, base = {}, zone = {};
+
+    for (var i = 0; i < polygonNames.length; i++) {
+      var key = polygonNames[i];
+      indexPush(exact, foldName(key), key);
+
+      // Register the pre-dash base so a city-wide alert fans out to its zones.
+      // Large cities (ירושלים, חיפה, תל אביב) exist ONLY as subzone
+      // polygons, so without this a city-wide alert lit one arbitrary sliver.
+      var norm = normalizeName(key);
+      var dash = norm.indexOf('-');
+      if (dash > 0) {
+        var baseCity = norm.slice(0, dash).trim();
+        if (baseCity.length >= 2) indexPush(base, foldName(baseCity), key);
+      }
+    }
+
+    // cities.json is Oref's own catalogue: `value` is what the feed emits and
+    // `name` is the display form. Register both as aliases, but only when they
+    // fold onto exactly one existing polygon -- never invent a mapping.
+    if (citiesData && citiesData.length) {
+      for (var c = 0; c < citiesData.length; c++) {
+        var city = citiesData[c];
+        if (!city || city.value === 'all') continue;
+        var forms = [city.value, city.name];
+        var target = null;
+        for (var f = 0; f < forms.length; f++) {
+          var hit = forms[f] ? exact[foldName(forms[f])] : null;
+          if (hit && hit.length === 1) { target = hit[0]; break; }
+        }
+        if (!target) continue;
+        for (var g = 0; g < forms.length; g++) {
+          if (forms[g]) indexPush(exact, foldName(forms[g]), target);
+        }
+        // District ("zone") membership, so a district-wide alert can light all
+        // of its towns. Consulted only after exact and base lookups, so the two
+        // names that are both a district and a town ("לכיש", "אילת")
+        // still resolve to the town.
+        if (city.zone) indexPush(zone, foldName(city.zone), target);
+      }
+    }
+
+    nameIndex = { exact: exact, base: base, zone: zone };
+    if (typeof console !== 'undefined' && console.log) {
+      console.log('\u{1F5FA}️ Name index: ' + Object.keys(exact).length + ' names, ' +
+                  Object.keys(base).length + ' base cities, ' +
+                  Object.keys(zone).length + ' districts');
+    }
+    return nameIndex;
   }
 
   // --- Build pre-computed polygons from locations_polygons.json ---
   // Coordinates in locations_polygons.json are already [lng, lat] — GeoJSON order
     
 var nameToId = {};   // name → numeric feature id (for setFeatureState)
+  var cachedCitiesData = null; // cities.json, kept for buildNameIndex aliases
   var pendingPolygonCallback = null;
 
 function buildPolygons(data, onReady) {
@@ -2820,6 +2933,12 @@ function buildPolygons(data, onReady) {
       fid++;
     }
     
+    // Build the name -> polygon index now that featureMap is populated.
+    // cachedCitiesData is set by the startup Promise.all; it may be null on the
+    // first call if polygons win the race, in which case the cities loader
+    // rebuilds the index.
+    buildNameIndex(Object.keys(featureMap), cachedCitiesData);
+
     polygonsGeoJSON.features = features;
     updateMapLibreSource();
     if (onReady) onReady();
@@ -2887,6 +3006,17 @@ function buildPolygons(data, onReady) {
     return false;
   }
 
+  // An explicit threat name ('ירי רקטות וטילים', 'חדירת כלי טיס עוין'...) in
+  // free text (e.g. an alert `desc`), or null when there is none. Used to
+  // rescue a GENERIC shelter command whose only threat info sits in the desc.
+  function explicitThreatIn(text) {
+    if (!text) return null;
+    for (var i = 0; i < THREAT_TERMS.length; i++) {
+      if (text.indexOf(THREAT_TERMS[i].term) !== -1) return THREAT_TERMS[i].state;
+    }
+    return null;
+  }
+
   function classifyTitle(title) {
     var originalTitle = title || "";
     title = originalTitle.replace(/\s+/g, ' ').trim();
@@ -2905,11 +3035,14 @@ function buildPolygons(data, onReady) {
       if (title.indexOf(THREAT_TERMS[i].term) !== -1) return THREAT_TERMS[i].state;
     }
 
-    // 3. GENERIC SHELTER COMMAND — preserve whatever threat is already active.
-    if (titleIncludesAny(title, INHERIT_TERMS)) return 'inherit';
-
-    // 4. PRE-ALERT / PREPAREDNESS
+    // 3. PRE-ALERT / PREPAREDNESS — must beat generic shelter commands.
+    // Oref's pre-alert (בדקות הקרובות...) carries a generic shelter desc like
+    // "היכנסו למרחב המוגן"; if INHERIT ran first, that desc would resolve to
+    // red and the pre-alert would never show yellow.
     if (titleIncludesAny(title, YELLOW_TERMS)) return 'yellow';
+
+    // 4. GENERIC SHELTER COMMAND — preserve whatever threat is already active.
+    if (titleIncludesAny(title, INHERIT_TERMS)) return 'inherit';
 
     // 5. UNKNOWN — default to the most severe interpretation, and say so once.
     if (!_warnedUnknownTitles[title]) {
@@ -3759,154 +3892,167 @@ function openLocationPanel(name) {
   }
 
 /**
- * Resolves Oref city names to GeoJSON polygon names automatically.
- * Handles different types of dashes and extra whitespace.
+ * Resolves an Oref location string to the polygon key(s) it designates.
+ *
+ * Returns an ARRAY, because one Oref name legitimately maps to several
+ * polygons: a city-wide alert for "ירושלים" covers all seven Jerusalem zones,
+ * and there is no whole-city polygon to fall back on.
+ *
+ * Resolution order, strictest first. Every step is exact against an index --
+ * there is deliberately no similarity or substring scoring. The previous
+ * implementation's superKey.includes(superOref) and startsWith fallbacks
+ * silently lit the wrong city ("דן" -> "עידן", "אזור לא ידוע" -> "אזור",
+ * "מודיעין" -> "מודיעין עילית"). Lighting the wrong polygon is worse than
+ * lighting none: it hides the real alert and raises a false one.
  */
+function resolveLocation(orefName, strict) {
+    var folded = foldName(orefName);
+    if (!folded) return [];
 
-   
-function resolveCityName(orefName) {
-    function clean(str) {
-        return str.replace(/[\u2010-\u2015\u2212]/g, '-')
-                  .replace(/\s+/g, ' ')
-                  .trim();
-    }
-    
-    // 🚨 THE NEUTRALIZER: Strips all punctuation to create an unbreakable fingerprint
-    function superClean(str) {
-        return str.replace(/[-\s,"'׳״]/g, '');
-    }
-
-    var cleanOref = clean(orefName);
-    var superOref = superClean(orefName);
-    var keys = Object.keys(featureMap);
-
-    // PRIORITY 0: Direct Match
-    if (featureMap[cleanOref]) return cleanOref;
-
-    // PRIORITY 1: Dash-Split Match (Base City)
-    var baseCity = cleanOref.split('-')[0].trim();
-    if (baseCity && featureMap[baseCity]) return baseCity;
-
-    var bestMatch = null;
-    var matchPriority = 99; 
-
-    for (var i = 0; i < keys.length; i++) {
-        var cleanKey = clean(keys[i]);
-        var superKey = superClean(keys[i]);
-        
-        if (cleanKey.length < 3) continue; 
-
-        // PRIORITY 1.5: SuperClean Exact Match (Bypasses all spacing/comma issues)
-        if (superKey === superOref) {
-            return keys[i];
+    // 1. Exact match after normalization, including cities.json aliases.
+    var hit = nameIndex.exact[folded];
+    if (hit && hit.length === 1) return hit.slice();
+    if (hit && hit.length > 1) {
+        // Genuinely ambiguous fold (only "גת" vs "ג'ת" today). Prefer the
+        // candidate matching the normalized form; otherwise give up rather
+        // than guess.
+        var norm = normalizeName(orefName);
+        for (var i = 0; i < hit.length; i++) {
+            if (normalizeName(hit[i]) === norm) return [hit[i]];
         }
+        return [];
+    }
 
-        // PRIORITY 2: SuperClean Contains (The Neighborhood Catcher)
-        if (superKey.includes(superOref)) {
-            if (matchPriority > 2 || (matchPriority === 2 && cleanKey.length < clean(bestMatch).length)) {
-                bestMatch = keys[i];
-                matchPriority = 2;
-            }
-        }
-        // PRIORITY 3: Starts With
-        else if (superOref.startsWith(superKey)) {
-            if (matchPriority > 3 || (matchPriority === 3 && cleanKey.length > clean(bestMatch).length)) {
-                bestMatch = keys[i];
-                matchPriority = 3;
-            }
+    // 2. City-wide name that exists only as subzones -> light every subzone.
+    var fan = nameIndex.base[folded];
+    if (fan && fan.length) return fan.slice();
+
+    // 3. Qualified subzone with no polygon of its own ("עכו - רמות ים" when
+    //    only "עכו" exists) -> fall back to the base city. Split only on a
+    //    real separator, never on an arbitrary prefix.
+    // Skipped in strict mode: it must not pre-empt splitting a multi-location
+    // string. "תל אביב - מרכז העיר, רמת גן - מערב" would otherwise cut at the
+    // first dash and fan out all of Tel Aviv, dropping Ramat Gan entirely.
+    if (strict) return [];
+
+    // 3a. District-wide alert -> light every town in the district.
+    var zoneFan = nameIndex.zone[folded];
+    if (zoneFan && zoneFan.length) return zoneFan.slice();
+
+    var norm2 = normalizeName(orefName);
+    var cut = norm2.search(/[-,]/);
+    if (cut > 0) {
+        var baseFolded = foldName(norm2.slice(0, cut));
+        if (baseFolded && baseFolded !== folded) {
+            var baseHit = nameIndex.exact[baseFolded];
+            if (baseHit && baseHit.length === 1) return baseHit.slice();
+            var baseFan = nameIndex.base[baseFolded];
+            if (baseFan && baseFan.length) return baseFan.slice();
         }
     }
 
-    if (bestMatch) {
-        console.log("🔍 Auto-Matched [" + orefName + "] to [" + bestMatch + "]");
-        return bestMatch;
-    }
-
-    return orefName;
+    return [];
 }
 
-   // --- SMART LOCATION UNROLLER ---
-// Intelligently breaks combined HFC strings into individual zones using validation
+// Names we could not place. A silent miss is what made this class of bug hard
+// to see; surface it instead. Inspect via window.__unresolvedLocations.
+var unresolvedLocations = {};
+function noteUnresolved(name) {
+    if (!name) return;
+    if (!unresolvedLocations[name]) {
+        unresolvedLocations[name] = 0;
+        console.warn('⚠️ Unresolved Oref location: ' + JSON.stringify(name));
+    }
+    unresolvedLocations[name]++;
+}
+try { window.__unresolvedLocations = unresolvedLocations; } catch (e) {}
+
+/**
+ * Back-compat single-value resolver: returns the input unchanged when nothing
+ * matched, preserving the previous contract. Callers still gate on featureMap.
+ */
+function resolveCityName(orefName) {
+    var out = resolveLocation(orefName);
+    return out.length ? out[0] : orefName;
+}
+
+   // --- LOCATION UNROLLER ---
+// Oref sometimes packs several places into one string ("מבטחים, עמיעוז, ישע").
+// Splitting is only safe AFTER the whole string fails to resolve, because many
+// legitimate polygon names contain the very separators we split on: 21 keys
+// contain a comma and 27 contain " ו". Every split candidate is therefore
+// verified against the index, and a split is accepted only if it explains the
+// whole string.
 function expandAndResolveLocations(rawLocations) {
     var finalLocations = [];
 
-    rawLocations.forEach(function(raw) {
-        var normalized = normalizeGeresh(raw).trim();
+    function pushAll(list) {
+        for (var i = 0; i < list.length; i++) {
+            if (finalLocations.indexOf(list[i]) === -1) finalLocations.push(list[i]);
+        }
+    }
+
+    // Splits `text` on `sep` and returns the resolved keys only if EVERY
+    // fragment resolves. A partial match means we guessed the separator wrong.
+    function trySplit(text, sep) {
+        var parts = text.split(sep);
+        if (parts.length < 2) return null;
+        var out = [];
+        for (var i = 0; i < parts.length; i++) {
+            var frag = parts[i].trim();
+            if (!frag) continue;
+            var hit = resolveLocation(frag, true);
+            if (!hit.length) return null;
+            out = out.concat(hit);
+        }
+        return out.length ? out : null;
+    }
+
+    (rawLocations || []).forEach(function(raw) {
+        var normalized = normalizeName(raw);
         if (!normalized) return;
 
-        // 1. Direct or Alias Match (Fast Exit)
-        var resolvedDirect = typeof resolveCityName === 'function' ? resolveCityName(normalized) : normalized;
-        if (featureMap[resolvedDirect]) {
-            finalLocations.push(resolvedDirect);
-            return;
+        // 1. Whole string first. This is the common case and must win outright,
+        //    so "מבטחים, עמיעוז, ישע" and "כפר הרי''ף וצומת ראם" resolve to
+        //    their own polygons instead of being torn apart.
+        var direct = resolveLocation(normalized, true);
+        if (direct.length) { pushAll(direct); return; }
+
+        // 2. "אשדוד - יא, יב, טו" -> distribute the base city over the zones.
+        var dash = normalized.lastIndexOf('-');
+        if (dash > 0 && normalized.indexOf(',', dash) > -1) {
+            var baseCity = normalized.slice(0, dash).trim();
+            var zones = normalized.slice(dash + 1).split(',');
+            var expanded = [], ok = true;
+            for (var z = 0; z < zones.length; z++) {
+                var zone = zones[z].trim();
+                if (!zone) continue;
+                var hit = resolveLocation(baseCity + ' - ' + zone, true);
+                if (!hit.length) { ok = false; break; }
+                expanded = expanded.concat(hit);
+            }
+            if (ok && expanded.length) { pushAll(expanded); return; }
         }
 
-        var fragments = [];
+        // 3. Plain comma list, then vav-joined pair. All-or-nothing each.
+        var byComma = trySplit(normalized, ',');
+        if (byComma) { pushAll(byComma); return; }
 
-        // 2. Dash-Comma Expansion (e.g., "אשדוד - יא, יב, טו")
-        var dashParts = normalized.split('-');
-        if (dashParts.length >= 2 && dashParts[dashParts.length - 1].includes(',')) {
-            var baseCity = dashParts.slice(0, -1).join('-').trim();
-            var subZones = dashParts[dashParts.length - 1].split(',');
-            subZones.forEach(function(zone) {
-                fragments.push(baseCity + " - " + zone.trim());
-            });
-        } else if (normalized.includes(',')) {
-            // 3. Standard Comma Expansion
-            fragments = normalized.split(',').map(function(s) { return s.trim(); });
-        } else {
-            fragments.push(normalized);
-        }
+        var byVav = trySplit(normalized, ' ו');
+        if (byVav) { pushAll(byVav); return; }
 
-        // 4. Handle "Vav" (And) Conditionally - 🚨 THE SOUTHERN FIX
-        var finalFragments = [];
-        fragments.forEach(function(frag) {
-            var andIndex = frag.indexOf(' ו');
-            if (andIndex > 0) {
-                var part1 = frag.substring(0, andIndex).trim();
-                var part2 = frag.substring(andIndex + 2).trim();
+        // 4. No split explained the string. Now allow the loose base-city
+        //    fallback, so an unknown subzone ("עכו - רמות ים") still lights its
+        //    parent city instead of nothing.
+        var loose = resolveLocation(normalized, false);
+        if (loose.length) { pushAll(loose); return; }
 
-                var res1 = typeof resolveCityName === 'function' ? resolveCityName(part1) : part1;
-                var res2 = typeof resolveCityName === 'function' ? resolveCityName(part2) : part2;
-
-                // 🚨 If at least ONE part is a real location, this is a grouped Oref string!
-                // We salvage whatever we can instead of throwing both away.
-                if (featureMap[res1] || featureMap[res2]) {
-                    if (featureMap[res1]) finalFragments.push(res1);
-                    if (featureMap[res2]) finalFragments.push(res2);
-                } else {
-                    // If neither matched cleanly, keep it intact for the final fallback
-                    finalFragments.push(frag); 
-                }
-            } else {
-                finalFragments.push(frag);
-            }
-        });
-
-        // 5. Final Resolution with Fallbacks
-        finalFragments.forEach(function(frag) {
-            var resolved = typeof resolveCityName === 'function' ? resolveCityName(frag) : frag;
-            
-            if (resolved && featureMap[resolved]) {
-                finalLocations.push(resolved);
-            } else if (frag.includes(' ו')) {
-                // ULTIMATE FALLBACK: If it STILL failed and has a Vav, blindly split it 
-                // and throw the pieces at the fuzzy resolver one last time.
-                var bruteParts = frag.split(' ו');
-                bruteParts.forEach(function(p) {
-                    var bruteRes = typeof resolveCityName === 'function' ? resolveCityName(p.trim()) : p.trim();
-                    if (bruteRes && featureMap[bruteRes]) {
-                        finalLocations.push(bruteRes);
-                    }
-                });
-            }
-        });
+        // 5. Nothing explained it. Record the miss rather than dropping it
+        //    silently -- see window.__unresolvedLocations.
+        noteUnresolved(normalized);
     });
 
-    // 6. Deduplicate and return
-    return finalLocations.filter(function(item, pos, self) {
-        return self.indexOf(item) === pos;
-    });
+    return finalLocations;
 }
 
    
@@ -3938,14 +4084,26 @@ function expandAndResolveLocations(rawLocations) {
     }
     
     // 3. THREAT CLASSIFICATION (Red vs Purple)
-    var combinedText = (rawTitle + ' ' + (alert.desc || '')).replace(/\s+/g, ' ').trim();
-    var state = classifyTitle(combinedText);
+    // Classify the TITLE alone. Concatenating the desc used to let a generic
+    // shelter desc ("היכנסו למרחב המוגן") outrank the pre-alert title and turn
+    // the whole event red (bug report: pre-alerts show red, not yellow). The
+    // desc is consulted only when the title is a generic shelter command and
+    // only for an explicit threat name, e.g. a drone alert whose title is
+    // "היכנסו למרחב המוגן" and whose desc names "חדירת כלי טיס עוין".
     var cleanTitle = rawTitle.replace(/\s+/g, ' ').trim();
+    var state = classifyTitle(cleanTitle);
+    if (state === 'inherit') {
+      var descThreat = explicitThreatIn(String(alert.desc || ''));
+      if (descThreat) state = descThreat;
+    }
 
     if (state !== 'green') lastDangerTime = Date.now();
     
 // 4. ARRAY FIX & UNROLLER
-  var rawLocations = Array.isArray(alert.data) ? alert.data : alert.data.split(',').map(function(s) { return s.trim(); });
+  // Do NOT pre-split on comma: 21 polygon names legitimately contain one
+  // ("עין חרוד, תל יוסף", "דור, נחשולים"). expandAndResolveLocations() tries the
+  // whole string first and only splits when every fragment resolves.
+  var rawLocations = Array.isArray(alert.data) ? alert.data : [alert.data];
   var locations = expandAndResolveLocations(rawLocations);
   
   // 5. TIME SYNC
@@ -3959,14 +4117,13 @@ function expandAndResolveLocations(rawLocations) {
 
     // 6. EXECUTION LOOP
     for (var i = 0; i < locations.length; i++) {
-      var rawLoc = normalizeGeresh(locations[i]);
-      
-      // FUZZY RESOLVER: Translate complex neighborhoods into main city polygons
-      var loc = typeof resolveCityName === 'function' ? resolveCityName(rawLoc) : rawLoc;
-      
+      // expandAndResolveLocations() already returned canonical polygon keys.
+      var loc = locations[i];
+
       if (nameToId[loc] === undefined) {
-          droppedCities.push(rawLoc + (loc !== rawLoc ? " (-> " + loc + ")" : ""));
-          continue; 
+          droppedCities.push(loc);
+          noteUnresolved(loc);
+          continue;
       }
       
       // A generic shelter command carries no threat type, so resolve it against
@@ -4218,9 +4375,17 @@ function processHistoryEntry(entry) {
         }
     }
 
-    var title = (rawTitle + ' ' + (entry.desc || '')).replace(/\s+/g, ' ').trim();
-    var state = classifyTitle(title);
-    var rawLocations = Array.isArray(entry.data) ? entry.data : entry.data.split(',').map(function(s) { return s.trim(); });
+    // Classify the title alone (see the live path — concatenating desc let a
+    // generic shelter desc outrank pre-alert titles and turn them red).
+    var state = classifyTitle(rawTitle.replace(/\s+/g, ' ').trim());
+    if (state === 'inherit') {
+      var descThreat = explicitThreatIn(String(entry.desc || ''));
+      if (descThreat) state = descThreat;
+    }
+    // History API sends `data` as a single location string. Never pre-split on
+    // comma -- 21 real polygon names contain one. expandAndResolveLocations()
+    // resolves the whole string first and splits only if every fragment matches.
+    var rawLocations = Array.isArray(entry.data) ? entry.data : [String(entry.data)];
     var locations = expandAndResolveLocations(rawLocations);
     var cleanTitle = rawTitle.replace(/\s+/g, ' ').trim();
     var ts = parseAlertDate(entry.alertDate);
@@ -4234,11 +4399,8 @@ function processHistoryEntry(entry) {
     }
     
     for (var i = 0; i < locations.length; i++) {
-      var rawLoc = normalizeGeresh(locations[i]);
-      
-      // 🚨 THE MISSING LINK: Added the Fuzzy Resolver to the history processor!
-      var loc = typeof resolveCityName === 'function' ? resolveCityName(rawLoc) : rawLoc;
-
+      // Already canonical polygon keys from expandAndResolveLocations().
+      var loc = locations[i];
       if (!loc) continue;
       recordHistory(loc, cleanTitle, entry.alertDate || '', resolveInheritedState(state, loc));
       
@@ -4396,7 +4558,8 @@ function processEntries(entries) {
         if (!ts) continue;
         
         // 🚨 THE SPLITTER & UNROLLER
-        var rawLocations = Array.isArray(e.data) ? e.data : String(e.data).split(',').map(function(s) { return s.trim(); });
+        // Single raw string; the expander decides whether it is one place or many.
+        var rawLocations = Array.isArray(e.data) ? e.data : [String(e.data)];
         var locations = expandAndResolveLocations(rawLocations);
         
         for (var j = 0; j < locations.length; j++) {
@@ -5495,7 +5658,13 @@ document.addEventListener('app:stateChanged', function() {
     ])
     .then(function(responses) {
 var data = responses[0]; 
-        var citiesData = responses[1]; 
+        var citiesData = responses[1];
+        cachedCitiesData = citiesData;
+        // Polygons may already have been indexed without the cities.json
+        // aliases (load order is not guaranteed); rebuild now that we have both.
+        if (Object.keys(featureMap).length) {
+            buildNameIndex(Object.keys(featureMap), citiesData);
+        }
 
         // 🚨 THE FIX: Bulletproof data extraction
         for (var i = 0; i < citiesData.length; i++) {
