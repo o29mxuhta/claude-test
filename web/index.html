@@ -215,11 +215,11 @@ body.idle #right-panel { bottom: 12px; gap: 0; }
 body.panel-open #legend { display: none; }
 
 #timeline-btn {
-  max-height: 40px;
-  max-width: 220px;
+  max-height: 32px;
+  max-width: 200px;
   background: rgba(255,255,255,0.92);
   border: 1px solid #ccc;
-  border-radius: 20px;
+  border-radius: 16px;
   cursor: pointer;
   box-shadow: 0 2px 8px rgba(0,0,0,0.2);
   overflow: hidden;
@@ -228,9 +228,13 @@ body.panel-open #legend { display: none; }
   direction: ltr;
 }
 #timeline-btn.has-data { display: flex; background: rgba(254, 243, 199, 0.92); border-color: #f59e0b; }
-#timeline-btn-row { display: flex; align-items: center; gap: 6px; padding: 0 12px; height: 40px; direction: rtl; cursor: pointer; }
-.btn-icon { font-size: 18px; line-height: 1; flex-shrink: 0; }
-.btn-text { font-size: 13px; font-weight: 500; white-space: nowrap; }
+/* 32px keeps the pill a comfortable tap target while giving back 8px of map. */
+#timeline-btn-row { display: flex; align-items: center; gap: 5px; padding: 0 10px; height: 32px; direction: rtl; cursor: pointer; }
+.btn-icon { font-size: 15px; line-height: 1; flex-shrink: 0; }
+/* The icons carry inline width/height="18"; only a CSS rule overrides that, so
+   font-size alone would leave the row tall enough to undo the height cut. */
+.btn-icon svg { width: 15px; height: 15px; }
+.btn-text { font-size: 12px; font-weight: 500; white-space: nowrap; }
 @media (hover: hover) { #timeline-btn:hover { background: rgba(253, 230, 138, 0.92); border-color: #f59e0b; } }
 
 body.idle #timeline-btn { opacity: 0; max-height: 0 !important; overflow: hidden; pointer-events: none; margin: 0; padding: 0; }
@@ -301,9 +305,14 @@ body.panel-open #timeline-btn, body.driving #timeline-btn { display: none !impor
 .up-event-sep { border-bottom: 1px solid #ccc; padding-bottom: 3px; margin-bottom: 3px; }
 #up-event-list .up-empty { padding: 12px; color: #888; font-size: 13px; text-align: center; }
 
-/* Timeline UI */
-#up-timeline { flex-shrink: 0; direction: ltr; padding: 8px 12px 4px; border-top: 1px solid #eee; }
-#timeline-slider-wrap { position: relative; width: 100%; padding-bottom: 6px; }
+/* Timeline UI
+   Kept deliberately compact: this is the one panel state the user sits in for a
+   long stretch while reading the map underneath it, so every row here is sized
+   to its content rather than padded for comfort. Touch targets are held at 28px
+   minimum — shrinking the transport buttons past that would trade map area for
+   misses on the scrub controls. */
+#up-timeline { flex-shrink: 0; direction: ltr; padding: 6px 10px 4px; border-top: 1px solid #eee; }
+#timeline-slider-wrap { position: relative; width: 100%; padding-bottom: 4px; }
 #timeline-ticks { position: relative; width: calc(100% - 16px); margin: 0 8px; height: 8px; pointer-events: none; border-radius: 4px; overflow: hidden; background: #eee; }
 #timeline-ticks span { position: absolute; height: 100%; top: 0; opacity: 0.85; }
 #timeline-slider { width: 100%; cursor: pointer; -webkit-appearance: none; appearance: none; height: 4px; border-radius: 2px; background: #93c5fd; }
@@ -313,21 +322,21 @@ body.panel-open #timeline-btn, body.driving #timeline-btn { display: none !impor
 #timeline-label { position: absolute; left: 0; margin-right: 5px; font-size: 12px; font-weight: bold; white-space: nowrap; font-variant-numeric: tabular-nums; }
 #timeline-date-row { display: flex; align-items: center; justify-content: center; position: relative; direction: ltr; }
 #timeline-date-nav { display: flex; align-items: center; background: #fef3c7; border: 1px solid #f59e0b; border-radius: 999px; overflow: hidden; }
-#timeline-date-nav button { background: none; border: none; font-size: 16px; font-weight: bold; cursor: pointer; padding: 4px 10px; line-height: 1; color: #92400e; user-select: none; -webkit-user-select: none; }
+#timeline-date-nav button { background: none; border: none; font-size: 14px; font-weight: bold; cursor: pointer; padding: 2px 9px; min-height: 26px; line-height: 1; color: #92400e; user-select: none; -webkit-user-select: none; }
 #timeline-date-nav button:hover { background: #fde68a; }
 #timeline-date-nav button:active { background: #fcd34d; }
 #timeline-date-nav button:disabled { opacity: 0.3; cursor: default; }
-#tl-date-nav {margin-left: 30px;}
+#tl-date-nav { margin-left: 18px; }
 #tl-date-input::-webkit-calendar-picker-indicator { position: absolute; top: 0; left: 0; width: 100%; height: 100%; cursor: pointer; }
-#tl-date-label { font-size: 13px; font-weight: 600; white-space: nowrap; color: #78350f; padding: 0 2px; }
+#tl-date-label { font-size: 12px; font-weight: 600; white-space: nowrap; color: #78350f; padding: 0 2px; }
 
-#timeline-transport { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 6px; direction: ltr; }
-#timeline-transport button { background: none; border: 1px solid #ccc; border-radius: 6px; font-size: 18px; cursor: pointer; padding: 4px 12px; line-height: 1; color: #333; user-select: none; }
+#timeline-transport { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 4px; direction: ltr; }
+#timeline-transport button { background: none; border: 1px solid #ccc; border-radius: 6px; font-size: 15px; cursor: pointer; padding: 2px 10px; min-height: 28px; line-height: 1; color: #333; user-select: none; }
 #timeline-transport button:hover { background: #eee; }
 #timeline-transport button:active { background: #ddd; }
-#timeline-transport #tl-prev, #timeline-transport #tl-next { font-size: 19px; background: rgba(219, 234, 254, 0.92); border-color: #93c5fd; }
+#timeline-transport #tl-prev, #timeline-transport #tl-next { font-size: 16px; background: rgba(219, 234, 254, 0.92); border-color: #93c5fd; }
 
-#up-close-row { display: flex; align-items: center; gap: 6px; padding: 6px 0 4px; direction: rtl; cursor: pointer; }
+#up-close-row { display: flex; align-items: center; gap: 6px; padding: 4px 0 2px; direction: rtl; cursor: pointer; }
 #up-close-row:hover .btn-text { color: #111; }
 .tl-close { font-size: 16px; cursor: pointer; color: #888; margin-right: auto; }
 .tl-close:hover { color: #333; }
@@ -441,6 +450,7 @@ body.f-ellipse #ellipse-stub { display: block !important; }
   #timeline-date-nav button { font-size: 14px; padding: 3px 8px; }
   #tl-date-label { font-size: 12px; }
   .btn-icon { font-size: 16px; }
+  .btn-icon svg { width: 16px; height: 16px; }
   .btn-text { font-size: 12px; }
   
   #errorDetail { top: 140px; left: 8px; }
@@ -471,22 +481,31 @@ body.f-ellipse #ellipse-stub { display: block !important; }
   /* Floating card, inset from the viewport edges.
      Was a full-bleed 380px slab pinned to top/right/bottom: it read as a wall
      rather than an object, and any polygon beneath it was sliced clean in half
-     with no visual cue that the map continued underneath. */
+     with no visual cue that the map continued underneath.
+
+     Height is content-driven, NOT stretched. Pinning both top and bottom made
+     the slim (timeline-scrubbing) card span the whole viewport to hold a ~120px
+     strip, covering far more map than the control needed. max-height caps the
+     full card instead; #up-event-list already scrolls inside it. */
   #unified-panel.slim, #unified-panel.full {
     display: flex;
     top: 14px;
     right: 14px;
-    bottom: 14px;
+    bottom: auto;
     left: auto;
     width: 336px;
     height: auto;
-    max-height: none;
+    max-height: calc(100vh - 28px);
     border-radius: 18px;
     overflow: hidden;
   }
+  /* Scrubbing history only needs the timeline chrome, so the card narrows too —
+     this is the state the user sits in while reading the map underneath. */
+  #unified-panel.slim { width: 292px; }
   #unified-panel.full #up-handle { display: none; }
-  #up-location { padding-top: 15px; }
-  #up-timeline { padding-top: 20px; }
+  #up-location { padding-top: 10px; }
+  /* Was 20px, to clear the old full-bleed layout's top edge. */
+  #up-timeline { padding-top: 8px; }
 }
 
 
@@ -3759,10 +3778,20 @@ function openFullPanel(name) {
 
     var GAP = 40;              // keep the polygon this clear of the panel edge
     var dx = 0, dy = 0;
-    if (window.matchMedia('(min-width: 601px)').matches) {
-      if (pt.x > pr.left - GAP) dx = pt.x - (pr.left / 2);
+    var isDesktop = window.matchMedia('(min-width: 601px)').matches;
+
+    // Only nudge when the target genuinely sits behind the card. Testing one
+    // edge was fine while the panel spanned the viewport, but it is now a short
+    // content-height card, so an x-only test would pan cities that are already
+    // in open map well below it.
+    var occluded = pt.x > pr.left - GAP && pt.x < pr.right + GAP &&
+                   pt.y > pr.top  - GAP && pt.y < pr.bottom + GAP;
+    if (!occluded) return;
+
+    if (isDesktop) {
+      dx = pt.x - (pr.left / 2);
     } else {
-      if (pt.y > pr.top - GAP) dy = pt.y - (pr.top / 2);
+      dy = pt.y - (pr.top / 2);
     }
     if (!dx && !dy) return;    // already in open map — leave the camera alone
 
@@ -4330,15 +4359,28 @@ function expandAndResolveLocations(rawLocations) {
     var h = (canvas && canvas.clientHeight) || window.innerHeight || 0;
 
     if (window.matchMedia('(min-width: 601px)').matches) {
-      pad.right = r.width + 28;   // card width + its inset + a breathing gap
+      // Reserve the right strip only when the card is tall enough that a
+      // centred target would actually land behind it. The slim (scrubbing) card
+      // is ~120px tall, so reserving the full column would shove every city to
+      // the far left for no reason. Below that, a little top padding is enough.
+      if (r.height > h * 0.45) {
+        pad.right = r.width + 28; // card width + its inset + a breathing gap
+      } else {
+        pad.top = Math.max(pad.top, r.height + 28);
+      }
     } else {
       pad.bottom = r.height + 16;
     }
 
     // MapLibre throws if padding leaves no room to draw. Keep a floor of 120px
-    // of usable map on each axis and give up the extra padding instead.
+    // of usable map on each axis and give up the extra padding instead. Clamp
+    // top as well as bottom: the slim card now feeds a measured value into
+    // pad.top, so on a short viewport top alone could exceed the budget.
     if (w && pad.left + pad.right > w - 120) pad.right = Math.max(0, w - 120 - pad.left);
-    if (h && pad.top + pad.bottom > h - 120) pad.bottom = Math.max(0, h - 120 - pad.top);
+    if (h && pad.top + pad.bottom > h - 120) {
+      pad.bottom = Math.max(0, h - 120 - pad.top);
+      if (pad.top > h - 120) { pad.top = Math.max(0, h - 120); pad.bottom = 0; }
+    }
     return pad;
   }
   try { window.getMapPadding = getMapPadding; } catch (e) {}
