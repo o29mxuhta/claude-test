@@ -345,25 +345,29 @@ body.panel-open #timeline-btn, body.driving #timeline-btn { display: none !impor
 /* =========================================
    6. HAMBURGER MENU & MODALS
 ========================================= */
-/* Menu button lives in the left rail, stacked under the map zoom/reset controls.
+/* Menu button sits immediately to the right of the map zoom/reset controls,
+   vertically centred on the zoom-out (−) button.
    It used to sit at top-right, where it overlapped the events panel card (the
    button is z-index 9999, the panel 1010, so it floated on top of the panel's
-   own corner). --menu-btn-top is measured from the live control group by
-   positionMenuButton(); the literal here is only the pre-measurement fallback,
-   because the control group's button count is built at runtime. */
+   own corner). --menu-btn-top/left are measured from the live controls by
+   positionMenuButton(); the literals here are only the pre-measurement
+   fallbacks, and they match today's geometry (controls at top 85px / left 10px,
+   29px buttons) so there's no visible jump on load. */
 #menu-btn {
-  position: fixed !important; top: var(--menu-btn-top, 182px) !important;
-  left: 10px !important; right: auto !important; bottom: auto !important; z-index: 9999 !important;
+  position: fixed !important; top: var(--menu-btn-top, 109px) !important;
+  left: var(--menu-btn-left, 49px) !important; right: auto !important; bottom: auto !important; z-index: 9999 !important;
   background: rgba(255,255,255,0.92); border: 1px solid #ccc; border-radius: 50%; width: 40px; height: 40px;
   display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.2); color: #555; padding: 0;
 }
-/* The panel follows the button down the left rail rather than staying pinned
-   top-right, so the two never read as unrelated controls. */
+/* The panel opens directly below the button and shares its left edge, so the two
+   never read as unrelated controls. max-width is derived from that left offset —
+   a fixed calc(100vw - 28px) would overflow now that the panel no longer starts
+   at the viewport edge. */
 #menu-panel {
-  display: none; position: fixed !important; top: var(--menu-panel-top, 230px) !important;
-  left: 10px !important; right: auto !important; bottom: auto !important; z-index: 9998 !important;
+  display: none; position: fixed !important; top: var(--menu-panel-top, 157px) !important;
+  left: var(--menu-panel-left, 49px) !important; right: auto !important; bottom: auto !important; z-index: 9998 !important;
   background: rgba(255,255,255,0.97); border: 1px solid #ccc; border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.2); direction: rtl;
-  width: 320px; max-width: calc(100vw - 28px); max-height: calc(100vh - var(--menu-panel-top, 230px) - 20px); overflow-y: auto;
+  width: 320px; max-width: calc(100vw - var(--menu-panel-left, 49px) - 14px); max-height: calc(100vh - var(--menu-panel-top, 157px) - 20px); overflow-y: auto;
 }
 .menu-item { border-bottom: 1px solid #f0f0f0; }
 .menu-item:last-child { border-bottom: none; }
@@ -438,9 +442,15 @@ body.f-ellipse #ellipse-stub { display: block !important; }
   #legend span, #legend div, #legend i { font-size: 12px !important; }
   #legend .dot { width: 12px; height: 12px; }
    
-  /* Align with the 6px left inset the map controls use on mobile. */
-  #menu-btn { width: 36px; height: 36px; left: 6px !important; }
-  #menu-panel { top: var(--menu-panel-top, 220px) !important; left: 6px !important; right: auto !important; width: calc(100vw - 24px); max-width: none; max-height: calc(100dvh - var(--menu-panel-top, 220px) - 24px); border-radius: 16px; box-shadow: 0 8px 32px rgba(0,0,0,0.3); overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; padding-bottom: calc(20px + env(safe-area-inset-bottom)); }
+  /* Mobile moves the whole control rail (top 75px / left 6px) and shrinks the
+     button to 36px, so both measured offsets differ — hence separate fallbacks.
+     No `left` override here: the measured --menu-btn-left already accounts for
+     the 6px rail inset. */
+  #menu-btn { width: 36px; height: 36px; top: var(--menu-btn-top, 101px) !important; left: var(--menu-btn-left, 45px) !important; }
+  /* The panel stays pinned to the 6px edge instead of following the button right.
+     It's a near-full-width sheet on mobile, so aligning it to the button would
+     cost ~40px of width and buy nothing. Only its top tracks the button. */
+  #menu-panel { top: var(--menu-panel-top, 145px) !important; left: 6px !important; right: auto !important; width: calc(100vw - 24px); max-width: none; max-height: calc(100dvh - var(--menu-panel-top, 145px) - 24px); border-radius: 16px; box-shadow: 0 8px 32px rgba(0,0,0,0.3); overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; padding-bottom: calc(20px + env(safe-area-inset-bottom)); }
   .menu-item-label { white-space: normal; line-height: 1.2; padding-left: 8px; }
   .menu-item-row { padding: 14px 16px; }
   
@@ -6397,32 +6407,48 @@ function rebuildMapButtons() {
     navGroup.appendChild(resetBtn);
     /*navGroup.appendChild(themeBtn);*/
 
-    // The menu button hangs off the bottom of this group, and the group's height
-    // just changed.
+    // The menu button is anchored to this group's right edge and to the − button's
+    // centre, and the group's contents just changed.
     positionMenuButton();
 }
 
-// Park the menu button directly under the map controls in the left rail.
-// The control stack is assembled at runtime (NavigationControl's two buttons
-// plus whatever rebuildMapButtons() appends — the theme button is currently
-// commented out, so the count is 3 today and 4 the moment someone uncomments
-// it). Hard-coding a top offset would silently overlap the moment that changes,
-// so measure the rendered group instead and publish the result as a CSS var.
+// Park the menu button immediately to the right of the map controls, vertically
+// centred on the zoom-out (−) button.
+//
+// Centre on the − button, not on the control group as a whole: the group is
+// assembled at runtime (NavigationControl's two buttons plus whatever
+// rebuildMapButtons() appends — the theme button is currently commented out, so
+// the count is 3 today and 4 the moment someone uncomments it). The group's
+// centre therefore moves whenever that count changes, while the − button is the
+// second row of the stack and stays put. Measuring beats hard-coding for the same
+// reason: a literal offset would silently drift.
 function positionMenuButton() {
     var ctrls = document.querySelector('.maplibregl-ctrl-top-left');
     var btn = document.getElementById('menu-btn');
     if (!ctrls || !btn) return;
 
     var r = ctrls.getBoundingClientRect();
-    // Before the controls render this is a zero-height box; bailing leaves the
-    // CSS fallback in place rather than stacking the button at the viewport top.
-    if (!r.height) return;
+    // Before the controls render this is a zero-size box; bailing leaves the CSS
+    // fallbacks in place rather than parking the button in the viewport corner.
+    // Width matters now as well as height — the horizontal offset depends on it.
+    if (!r.height || !r.width) return;
 
     var GAP = 10;
-    var top = Math.round(r.bottom + GAP);
+    var h = btn.offsetHeight || 40;
+
+    // Fall back to the group's own centre if there's no zoom-out button to find,
+    // e.g. if NavigationControl is ever constructed with showZoom: false.
+    var zoomOut = ctrls.querySelector('.maplibregl-ctrl-zoom-out');
+    var anchor = (zoomOut && zoomOut.getBoundingClientRect().height) ? zoomOut.getBoundingClientRect() : r;
+
+    var left = Math.round(r.right + GAP);
+    var top = Math.round(anchor.top + (anchor.height / 2) - (h / 2));
+
     var root = document.documentElement;
+    root.style.setProperty('--menu-btn-left', left + 'px');
     root.style.setProperty('--menu-btn-top', top + 'px');
-    root.style.setProperty('--menu-panel-top', (top + btn.offsetHeight + 8) + 'px');
+    root.style.setProperty('--menu-panel-left', left + 'px');
+    root.style.setProperty('--menu-panel-top', (top + h + 8) + 'px');
 }
 
 // Re-measure whenever the control stack changes size. ResizeObserver catches
