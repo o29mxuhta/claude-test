@@ -1654,8 +1654,8 @@ function apiFetch(endpoint) {
   });
 
   function buildMapStyle(isDark, lang) {
-    var flavor = isDark ? WARM_DARK_FLAVOR : WARM_FLAVOR;
-    return {
+   var flavor = isDark ? (basemaps.themes ? basemaps.themes.dark : basemaps.DARK) : WARM_FLAVOR;
+     return {
       version: 8,
       glyphs: 'https://protomaps.github.io/basemaps-assets/fonts/{fontstack}/{range}.pbf',
       sprite: 'https://protomaps.github.io/basemaps-assets/sprites/v4/' + (isDark ? 'dark' : 'light'),
