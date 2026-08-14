@@ -1534,15 +1534,15 @@ function apiFetch(endpoint) {
         l.paint['line-width'] = scaleWidthExpr(l.paint['line-width'], 0.4);
       }
       
-      // 🚨 ISRAEL BORDER ONLY: Filter by Protomaps ISO codes (ISR)
+// 🚨 ISRAEL BORDER ONLY: Filter by Protomaps ISO codes (ISR)
       if (l.id === 'boundaries_country') {
         l.filter = [
           'all', 
           ['<=', 'kind_detail', 2], 
           ['!=', 'disputed', true],
           ['any', 
-            ['==', ['get', 'adm0_l'], 'ISR'], 
-            ['==', ['get', 'adm0_r'], 'ISR']
+            ['==', 'adm0_l', 'ISR'], 
+            ['==', 'adm0_r', 'ISR']
           ]
         ];
         if (l.paint) l.paint['line-width'] = 2.5; // Slightly thicker so it pops
