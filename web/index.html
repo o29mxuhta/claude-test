@@ -1499,14 +1499,16 @@ function apiFetch(endpoint) {
     return scaled;
   }
     
-  function customizeBasemapLayers(layers) {
+ function customizeBasemapLayers(layers) {
     var cleanLayers = [];
 
     for (var i = 0; i < layers.length; i++) {
       var orig = layers[i];
       
-      // 1. VAPORIZE NOISE: Skip heavy POI and transit layers completely
-      if (orig['source-layer'] === 'pois' || orig['source-layer'] === 'transit') {
+      // 1. VAPORIZE NOISE: Skip heavy POI, transit, and ROAD NUMBERS (shields)
+      if (orig['source-layer'] === 'pois' || 
+          orig['source-layer'] === 'transit' || 
+          (orig.id && orig.id.indexOf('shield') !== -1)) {
         continue;
       }
 
@@ -1531,16 +1533,24 @@ function apiFetch(endpoint) {
       if (l['source-layer'] === 'roads' && l.paint && l.paint['line-width']) {
         l.paint['line-width'] = scaleWidthExpr(l.paint['line-width'], 0.4);
       }
+      
+      // 🚨 ISRAEL BORDER ONLY: Filter by Protomaps ISO codes (ISR)
       if (l.id === 'boundaries_country') {
-        l.filter = ['all', ['<=', 'kind_detail', 2], ['!=', 'disputed', true]];
-        if (l.paint) l.paint['line-width'] = 2;
+        l.filter = [
+          'all', 
+          ['<=', 'kind_detail', 2], 
+          ['!=', 'disputed', true],
+          ['any', 
+            ['==', ['get', 'adm0_l'], 'ISR'], 
+            ['==', ['get', 'adm0_r'], 'ISR']
+          ]
+        ];
+        if (l.paint) l.paint['line-width'] = 2.5; // Slightly thicker so it pops
       }
+      
+      // 🚨 HIDE ALL OTHER INTERNAL BOUNDARIES
       if (l.id === 'boundaries') {
-        l.filter = ['>', 'kind_detail', 2];
-        if (l.paint) {
-          l.paint['line-width'] = 0.8;
-          l.paint['line-opacity'] = ['step', ['zoom'], 0, 9, 1];
-        }
+        continue; 
       }
 
       cleanLayers.push(l);
