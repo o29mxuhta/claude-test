@@ -1669,9 +1669,10 @@ function apiFetch(endpoint) {
     };
   }
 
-  // --- Map setup ---
-  var DEFAULT_CENTER = [32.2, 34.9], DEFAULT_ZOOM = 7.2;
-
+   // --- Map setup ---
+  // Centered on Israel (Lat 31.5, Lng 34.8), zoomed out to see neighboring countries
+  var DEFAULT_CENTER = [31.5, 34.8], DEFAULT_ZOOM = 5.5;
+   
   // 🚨 1. Use localStorage so it survives tab switching and mobile app backgrounding
   var savedCenter = DEFAULT_CENTER;
   var savedZoom = DEFAULT_ZOOM;
@@ -1696,18 +1697,18 @@ function apiFetch(endpoint) {
   var PMTILES_URL = 'pmtiles://https://assets.redmap.dev/middle-east.pmtiles';
   var MAP_STYLE = buildMapStyle(isDarkActive, currentLang);
 
-    var map = new maplibregl.Map({
+var map = new maplibregl.Map({
     container: 'map',
     style: MAP_STYLE,
     center: [savedCenter[1], savedCenter[0]], 
     zoom: savedZoom,
     
-    // Pan lock matches PMTiles coverage (lng 22–73, lat 3–50)
+    // Pan lock restricted to Egypt, Israel, Jordan, Lebanon, and Syria
     maxBounds: [
-        [22.0, 3.0],  // Southwest [lng, lat]
-        [73.0, 50.0]  // Northeast [lng, lat]
+        [24.0, 21.5],  // Southwest [lng, lat] (Egypt's SW corner)
+        [43.0, 37.5]   // Northeast [lng, lat] (Syria's NE corner)
     ],
-    
+   
     touchPitch: false,
     maxTileCacheZoomLevels: 8,
     fadeDuration: 0,
@@ -3803,10 +3804,15 @@ function openFullPanel(name) {
     } else {
       dy = pt.y - (pr.top / 2);
     }
-    if (!dx && !dy) return;    // already in open map — leave the camera alone
+if (!dx && !dy) return;    // already in open map — leave the camera alone
 
-    map.panBy([dx, dy], { duration: 420, essential: true });
+    map.panBy([dx, dy], { 
+      duration: 750, // Stretched from 420ms for a softer glide
+      easing: function(t) { return t * (2 - t); }, // Smooth ease-out curve
+      essential: true 
+    });
   }
+}
 
 function deselectLocation() {
     _removePanelHighlight();
@@ -4395,13 +4401,20 @@ function expandAndResolveLocations(rawLocations) {
   }
   try { window.getMapPadding = getMapPadding; } catch (e) {}
 
-  function maybeZoomToEvent() {
+function maybeZoomToEvent() {
     var bounds = getActiveEventBounds();
     if (!bounds) return;
     isZoomingProgrammatically = true;
-    map.fitBounds(bounds, { padding: getMapPadding(80), maxZoom: 10 });
+    map.fitBounds(bounds, { 
+      padding: getMapPadding(80), 
+      maxZoom: 10,
+      speed: 0.6,          // Slower flight speed (default is 1.2)
+      curve: 1.1,          // Flatter curve reduces the "zoom out and bounce back" effect
+      maxDuration: 2500,   // Cap the animation time so it doesn't drag on long flights
+      essential: true
+    });
   }
-
+   
   // --- Status indicator ---
   function setStatus(state, text) {
     var dot = document.getElementById('statusDot');
@@ -5679,9 +5692,14 @@ function processEntries(entries) {
               }
             };
             map.on('moveend', playFlyHandler);
-            map.fitBounds(bounds, { padding: getMapPadding(80), maxZoom: 10 });
-            return;
-          }
+            map.fitBounds(bounds, { 
+              padding: getMapPadding(80), 
+              maxZoom: 10,
+              speed: 0.6,
+              curve: 1.1,
+              essential: true
+            });
+            return;          }
         }
 
         playRAF = requestAnimationFrame(tick);
@@ -6107,11 +6125,17 @@ function startHeartbeat() {
     isZoomingProgrammatically = true;
     openLocationPanel(name);
 
-    var bounds = featureBounds(feature);
-    map.fitBounds(bounds, { padding: getMapPadding(80), maxZoom: 12 });
+var bounds = featureBounds(feature);
+    map.fitBounds(bounds, { 
+      padding: getMapPadding(80), 
+      maxZoom: 12,
+      speed: 0.8,
+      curve: 1.2,
+      essential: true
+    });
 
     map.once('moveend', function() {
-      isZoomingProgrammatically = false;
+       isZoomingProgrammatically = false;
     });
   });
 
