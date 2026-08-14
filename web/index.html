@@ -1133,13 +1133,6 @@ try {
     </button>
   </div>
 
-   <div id="menu-leaderboard" class="menu-item">
-    <button class="menu-item-row" type="button" onclick="openLeaderboard()">
-      <span class="menu-item-icon">⏱️</span>
-      <span class="menu-item-label">סטטיסטיקת התרעות</span>
-    </button>
-  </div>
-
    <div class="menu-item">
     <label class="menu-item-row" style="cursor: pointer; display: flex; justify-content: space-between; align-items: center; width: 100%;">
       <div style="display: flex; align-items: center;">
@@ -1216,17 +1209,6 @@ try {
 </div>
 
 <div id="historyTimeLabel" style="display:none; font-size:11px; color:#555; margin-top:5px; padding-top:5px; border-top:1px solid #ddd;"></div>
-
-   <div id="leaderboard-modal" class="modal-backdrop">
-    <div class="modal-content" style="max-width: 450px;">
-        <button class="modal-close" onclick="closeLeaderboard()">&times;</button>
-        <h2 style="margin-bottom: 5px;">⏱️ זמני התרעה מוקדמת</h2>
-        <p style="font-size: 13px; text-align: center; margin-bottom: 20px;">הפער בין קבלת איום למטח בפועל (היום)</p>
-        
-        <div id="leaderboard-list" style="max-height: 50vh; overflow-y: auto; padding-right: 5px;">
-            </div>
-    </div>
-</div>
    
 <div id="status">
   <div id="disclaimer-line">
@@ -3262,127 +3244,6 @@ function applyFeatureStyle(name, state, opacity) {
       if (!isLiveMode && currentViewTime) syncScrollToTime(currentViewTime);
       requestAnimationFrame(function() { _scrollSyncLock = false; });
     }
-  }
-   
-function updateLeaderboard(name, deltaSec, type, attackTs) {
-    if (deltaSec === null || deltaSec === undefined || isNaN(deltaSec) || deltaSec <= 0) return;
-
-    var timeOfAttack = attackTs || Date.now();
-    
-    var isDuplicate = warningLeaderboard.some(function(entry) {
-        return entry.name === name && Math.abs(timeOfAttack - entry.ts) < 120000;
-    });
-    if (isDuplicate) return;
-
-    var newEntry = { name: name, deltaSec: deltaSec, type: type, ts: timeOfAttack };
-    
-    warningLeaderboard.push(newEntry);
-    warningLeaderboard.sort(function(a, b) { return a.deltaSec - b.deltaSec; });
-    if (warningLeaderboard.length > 50) warningLeaderboard.pop();
-    
-    // Always render after modifying the data
-    renderLeaderboardUI();
-
-    setTimeout(function() {
-        fetch("https://hfc-alert-system.xanagis.workers.dev/api/leaderboard", {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(newEntry)
-        })
-        .then(function(response) {
-            if (!response.ok) throw new Error('HTTP error! Status: ' + response.status);
-            return response.json();
-        })
-        .then(function(data) {
-            console.log("Leaderboard sync successful!");
-        })
-        .catch(function(e) { 
-            console.warn("Leaderboard sync failed:", e); 
-        });
-    }, Math.random() * 5000);
-}
-
-// Global State
-var warningLeaderboard = []; 
-
-function openLeaderboard() {
-    // 1. Close the side menu and open the modal
-    closeMenu(); 
-    var modal = document.getElementById('leaderboard-modal');
-    modal.classList.add('visible');
-    
-    // 2. Target the list and show a loading message
-    var listEl = document.getElementById('leaderboard-list');
-    listEl.innerHTML = '<div style="text-align:center; padding:20px;">טוען נתונים...</div>';
-
-    // 3. THIS IS WHERE YOUR FETCH GOES
-    fetch('https://hfc-alert-system.xanagis.workers.dev/leaderboard')
-        .then(res => res.json())
-        .then(data => {
-            // Clear the loading text
-            listEl.innerHTML = ''; 
-            
-            // Handle empty data gracefully
-            if (!data || data.length === 0) {
-                listEl.innerHTML = '<div style="text-align:center; padding:20px;">אין נתונים כרגע</div>';
-                return;
-            }
-            
-            // Populate the list with the fetched data
-            data.forEach(item => {
-                const li = document.createElement('li');
-                li.style.marginBottom = "10px";
-                li.innerHTML = `<strong>${item.name}</strong>: ${item.seconds || 0} שניות`;
-                listEl.appendChild(li);
-            });
-        })
-        .catch(err => {
-            console.error("Error fetching data:", err);
-            listEl.innerHTML = '<div style="text-align:center; padding:20px; color: #ef4444;">שגיאה בטעינת הנתונים</div>';
-        });
-}
-   
-function loadInitialLeaderboard() {
-      console.log("Attempting to load initial leaderboard...");
-      fetch("https://hfc-alert-system.xanagis.workers.dev/api/leaderboard")
-          .then(function(res) { return res.json(); })
-          .then(function(data) {
-              warningLeaderboard = Array.isArray(data) ? data : [];
-              warningLeaderboard.sort(function(a, b) { return a.deltaSec - b.deltaSec; });
-              renderLeaderboardUI();
-          })
-          .catch(function(err) {
-              console.error("Failed to load initial data:", err);
-          });
-  }
-   
-function renderLeaderboardUI() {
-    // 1. Get the list element
-    var listEl = document.getElementById('leaderboard-list');
-    if (!listEl) return;
-    
-    // 2. Clear previous content
-    listEl.innerHTML = '';
-    
-    // 3. Check if warningLeaderboard has data
-    if (warningLeaderboard.length === 0) {
-        listEl.innerHTML = '<li>אין נתונים מהיממה האחרונה</li>';
-        return;
-    }
-    
-    // 4. Render the rows
-warningLeaderboard.forEach(function(entry) {
-    var li = document.createElement('li');
-    var statusText = entry.deltaSec > 0 
-        ? ' - זמן התרעה: ' + entry.deltaSec + ' שניות' 
-        : ' - התרעה מיידית (ללא התרעה מוקדמת)';
-        li.innerHTML = `<strong>${entry.name}</strong> - ${entry.type}`;
-        listEl.appendChild(li);
-});
-}
-
-function closeLeaderboard() {
-      document.getElementById('leaderboard-modal').classList.remove('visible');
   }
 
   var TITLE_LABELS = {
