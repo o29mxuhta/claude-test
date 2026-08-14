@@ -1702,10 +1702,10 @@ function apiFetch(endpoint) {
     center: [savedCenter[1], savedCenter[0]], 
     zoom: savedZoom,
     
-    // 🚨 HARD LOCK: Restricts panning tightly to Israel's North/South and East/West borders
+    // Pan lock matches PMTiles coverage (lng 22–73, lat 3–50)
     maxBounds: [
-        [33.5, 29.3], // Southwest coordinates (Sinai border)
-        [36.0, 33.5]  // Northeast coordinates (Lebanon/Syria border)
+        [22.0, 3.0],  // Southwest [lng, lat]
+        [73.0, 50.0]  // Northeast [lng, lat]
     ],
     
     touchPitch: false,
