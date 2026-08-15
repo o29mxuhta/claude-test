@@ -1549,7 +1549,7 @@ function apiFetch(endpoint) {
   }
 
     
- function customizeBasemapLayers(layers) {
+ function customizeBasemapLayers(layers, isDark) {
     var cleanLayers = [];
     var seaTextureInjected = false;
 
@@ -1623,6 +1623,31 @@ function apiFetch(endpoint) {
             // Single tuning knob for the whole effect. The swatch is mostly
             // transparent, so this stays a whisper over the base water colour.
             'fill-opacity': 0.6
+          }
+        });
+
+        // Coastline: stroke the water polygon boundary, so the line traces exactly
+        // where land meets sea (and lake/Dead Sea shores too). Sits above the water
+        // fill + texture and below roads/labels.
+        //
+        // Deliberately derived from WATER, not land: outlining a tiled polygon can
+        // leave faint segments along tile boundaries, and keying off water pushes
+        // any such artifact out into the open sea rather than across the cities on
+        // land. Colour is a shoreline blue-grey — darker than the pale water in
+        // light mode, lighter than both near-black land and navy water in dark —
+        // and stays out of the alert palette (red/purple/brown/yellow). Width grows
+        // with zoom; the coast is a finite contour, so it won't clutter the way a
+        // per-city outline would.
+        cleanLayers.push({
+          id: 'coastline',
+          type: 'line',
+          source: l.source,
+          'source-layer': l['source-layer'] || 'water',
+          layout: { 'line-join': 'round', 'line-cap': 'round' },
+          paint: {
+            'line-color': isDark ? '#6f93b3' : '#4d86a0',
+            'line-width': ['interpolate', ['linear'], ['zoom'], 5, 0.8, 8, 1.3, 11, 2.0],
+            'line-opacity': 0.8
           }
         });
       }
@@ -1747,7 +1772,7 @@ function apiFetch(endpoint) {
           url: PMTILES_URL
         }
       },
-      layers: customizeBasemapLayers(basemaps.layers('protomaps', flavor, { lang: lang }))
+      layers: customizeBasemapLayers(basemaps.layers('protomaps', flavor, { lang: lang }), isDark)
     };
   }
 
