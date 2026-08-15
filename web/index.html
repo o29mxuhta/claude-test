@@ -1480,9 +1480,78 @@ function apiFetch(endpoint) {
     }
     return scaled;
   }
+
+  // Procedural sea texture: a small, seamlessly-tiling swatch of faint wavelets
+  // plus a few stipple dots, drawn on a canvas so it needs no network asset (the
+  // CSP blocks new raster URLs anyway). Rendered as a fill-pattern over the water
+  // layer so the open sea reads as water rather than a flat colour slab.
+  //
+  // Seamless tiling: the waves are full-width sines with an integer period, so
+  // value and slope match across the left/right seam; every stroke and dot sits
+  // clear of all four edges, so the top/bottom seam is fully transparent. fill-
+  // pattern paints at a fixed screen size regardless of zoom, so this can't turn
+  // into dense hatching the way a zoom-scaled line would over open water.
+  //
+  // Colour adapts to theme because the water beneath does (#aad3df light /
+  // #1e3048 dark): light foam highlights on the pale sea, lifted navy on the dark.
+  function makeSeaTextureImage(isDark) {
+    var S = 48;                       // device px; shown at 24px via pixelRatio 2
+    var c = document.createElement('canvas');
+    c.width = S; c.height = S;
+    var ctx = c.getContext('2d');
+    ctx.clearRect(0, 0, S, S);
+    ctx.lineCap = 'round';
+
+    var crest  = isDark ? 'rgba(120,150,185,0.55)' : 'rgba(255,255,255,0.60)';
+    var trough = isDark ? 'rgba(90,120,160,0.38)'  : 'rgba(120,162,186,0.45)';
+    var dotCol = isDark ? 'rgba(125,155,190,0.42)' : 'rgba(255,255,255,0.50)';
+
+    function wave(yc, amp, k, w, color) {
+      ctx.beginPath();
+      for (var x = 0; x <= S; x++) {
+        var y = yc + amp * Math.sin((2 * Math.PI * k * x) / S);
+        if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = color;
+      ctx.lineWidth = w;
+      ctx.stroke();
+    }
+
+    // Two offset crests so the motif doesn't read as parallel rails.
+    wave(S * 0.30, 2.3, 1, 1.4, crest);
+    wave(S * 0.72, 2.3, 1, 1.3, trough);
+
+    // Sparse stipple, all inset from the edges to preserve the seam.
+    ctx.fillStyle = dotCol;
+    var dots = [[S * 0.16, S * 0.52], [S * 0.58, S * 0.14], [S * 0.86, S * 0.60]];
+    for (var d = 0; d < dots.length; d++) {
+      ctx.beginPath();
+      ctx.arc(dots[d][0], dots[d][1], 0.95, 0, 2 * Math.PI);
+      ctx.fill();
+    }
+
+    var img = ctx.getImageData(0, 0, S, S);
+    return { width: S, height: S, data: img.data };
+  }
+
+  // Provide the pattern on demand. Registered once on the map (a map-level event,
+  // so it survives setStyle); fires again after each theme toggle because setStyle
+  // drops user images, and re-supplies the swatch recoloured for the new theme.
+  function installSeaTextureHandler(mapObj) {
+    mapObj.on('styleimagemissing', function(e) {
+      if (e.id !== 'sea-texture-img') return;
+      if (mapObj.hasImage('sea-texture-img')) return;
+      try {
+        var dark = (typeof isDarkActive !== 'undefined') && isDarkActive;
+        mapObj.addImage('sea-texture-img', makeSeaTextureImage(dark), { pixelRatio: 2 });
+      } catch (err) { /* transient during style swap; next miss retries */ }
+    });
+  }
+
     
  function customizeBasemapLayers(layers) {
     var cleanLayers = [];
+    var seaTextureInjected = false;
 
     for (var i = 0; i < layers.length; i++) {
       var orig = layers[i];
@@ -1536,8 +1605,29 @@ function apiFetch(endpoint) {
       }
 
       cleanLayers.push(l);
+
+      // Lay the wave/stipple texture directly on top of the water fill (and below
+      // everything drawn after it — roads, boundaries, labels). Keyed off the
+      // water fill so it inherits the exact source; the guard keeps it to the
+      // first water fill in case the flavor emits more than one.
+      if (!seaTextureInjected && l.type === 'fill' &&
+          (l['source-layer'] === 'water' || (l.id && l.id.indexOf('water') === 0))) {
+        seaTextureInjected = true;
+        cleanLayers.push({
+          id: 'sea-texture',
+          type: 'fill',
+          source: l.source,
+          'source-layer': l['source-layer'] || 'water',
+          paint: {
+            'fill-pattern': 'sea-texture-img',
+            // Single tuning knob for the whole effect. The swatch is mostly
+            // transparent, so this stays a whisper over the base water colour.
+            'fill-opacity': 0.6
+          }
+        });
+      }
     }
-    
+
     return cleanLayers;
   }
 
@@ -1706,8 +1796,13 @@ var map = new maplibregl.Map({
     attributionControl: false
   });
 
+  // Supply the sea-texture fill-pattern. Registered here, right after construction
+  // and before the first frame renders, so the initial style's water texture and
+  // every post-theme-toggle rebuild both get the swatch on demand.
+  installSeaTextureHandler(map);
 
-   
+
+
   var mapLoaded = false;
   var polygonsGeoJSON = { type: 'FeatureCollection', features: [] };
   var featureMap = {};
