@@ -1733,8 +1733,14 @@ map.on('load', function() {
     function renderNeonBreathing(timestamp) {
         if (!map || !map.getLayer('alerts-glow')) return;
         var pulseMath = (Math.sin(timestamp / 500) + 1) / 2;
-        map.setPaintProperty('alerts-glow', 'line-width', 2 + (pulseMath * 6));
-        map.setPaintProperty('alerts-glow', 'line-blur', 2 + (pulseMath * 4));
+        // Thinner danger halo (was 2–8px wide / 2–6px blur, which read as a heavy
+        // strobe). Kept a live pulse so a lit city still breathes, just slimmer.
+        // If you retune these, mirror the resting values in the two static
+        // alerts-glow definitions below — this rAF loop can stop on a style
+        // reload (it returns without rescheduling while the layer is briefly
+        // removed), and the static line-width is what shows if it does.
+        map.setPaintProperty('alerts-glow', 'line-width', 1.5 + (pulseMath * 3));
+        map.setPaintProperty('alerts-glow', 'line-blur', 1.5 + (pulseMath * 3));
         requestAnimationFrame(renderNeonBreathing);
     }
     renderNeonBreathing(performance.now());
@@ -1792,7 +1798,7 @@ function ensureAlertLayers() {
     map.addLayer({ id: 'alerts-fill', type: 'fill', source: 'alerts-source', paint: { 'fill-color': ['coalesce', ['feature-state', 'fillColor'], '#888888'], 'fill-opacity': ['coalesce', ['feature-state', 'fillOpacity'], 0.01] } });
     map.addLayer({ id: 'alerts-hit', type: 'fill', source: 'alerts-source', paint: { 'fill-color': 'transparent' } });
     map.addLayer({ id: 'alerts-borders', type: 'line', source: 'alerts-source', paint: alertsBorderPaint() });
-    map.addLayer({ id: 'alerts-glow', type: 'line', source: 'alerts-source', paint: { 'line-color': ['coalesce', ['feature-state', 'lineColor'], 'transparent'], 'line-opacity': ['coalesce', ['feature-state', 'lineOpacity'], 0], 'line-width': 8, 'line-blur': 6 } });
+    map.addLayer({ id: 'alerts-glow', type: 'line', source: 'alerts-source', paint: { 'line-color': ['coalesce', ['feature-state', 'lineColor'], 'transparent'], 'line-opacity': ['coalesce', ['feature-state', 'lineOpacity'], 0], 'line-width': 3, 'line-blur': 3 } });
     map.addLayer({ id: 'alerts-stroke', type: 'line', source: 'alerts-source', paint: { 'line-color': ['coalesce', ['feature-state', 'lineColor'], '#aaaaaa'], 'line-opacity': ['coalesce', ['feature-state', 'lineOpacity'], 0], 'line-width': 1.5 } });
     
     map.moveLayer('alerts-hit');
@@ -2867,7 +2873,7 @@ function todayDateStr() {
   // Hebrew maqaf, the general-punctuation dash family, minus sign, compat hyphens.
   var DASH_RE = /[־‐-―−﹘﹣－]/g;
   // NBSP, NNBSP, en/em spaces and friends.
-  var ODD_SPACE_RE = /[   -   　]/g;
+  var ODD_SPACE_RE = /[   -   　]/g;
 
   function normalizeName(s) {
     if (s === null || s === undefined) return '';
@@ -6237,7 +6243,7 @@ function addAlertLayers() {
     });
 
     // 3. Glow and Stroke
-    map.addLayer({ id: 'alerts-glow', type: 'line', source: 'alerts-source', paint: { 'line-color': ['coalesce', ['feature-state', 'lineColor'], 'transparent'], 'line-opacity': ['coalesce', ['feature-state', 'lineOpacity'], 0], 'line-width': 8, 'line-blur': 6 } });
+    map.addLayer({ id: 'alerts-glow', type: 'line', source: 'alerts-source', paint: { 'line-color': ['coalesce', ['feature-state', 'lineColor'], 'transparent'], 'line-opacity': ['coalesce', ['feature-state', 'lineOpacity'], 0], 'line-width': 3, 'line-blur': 3 } });
     map.addLayer({ id: 'alerts-stroke', type: 'line', source: 'alerts-source', paint: { 'line-color': ['coalesce', ['feature-state', 'lineColor'], '#aaaaaa'], 'line-opacity': ['coalesce', ['feature-state', 'lineOpacity'], 0], 'line-width': 1.5 } });
 
     // 4. 🚨 HIT LAYER: Must be last to be on top!
