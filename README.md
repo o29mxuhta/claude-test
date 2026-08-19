@@ -1,9 +1,17 @@
 Live map of Israel showing [Pikud HaOref](https://www.oref.org.il) (Home Front Command) alerts as colored area polygons per location.
 
+<!--
+  Screenshots pending. To add them: open the live map in a browser, capture a
+  desktop and a mobile view, then save them as:
+    web/about/screenshot-desktop.png   (desktop)
+    web/about/screenshot-mobile.png    (mobile)
+  and replace each cell below with, e.g.:
+    <img src="web/about/screenshot-desktop.png" width="480" alt="Desktop"/><br/>Desktop
+-->
 <table>
   <tr>
-    <td align="center"><img src="tbd" width="480" alt="Desktop"/><br/>Desktop</td>
-    <td align="center"><img src="tbd" width="200" alt="Mobile"/><br/>Mobile</td>
+    <td align="center" width="480">📷 <em>Desktop screenshot coming soon</em><br/><br/>Desktop</td>
+    <td align="center" width="200">📱 <em>Mobile screenshot coming soon</em><br/><br/>Mobile</td>
   </tr>
 </table>
 
@@ -18,7 +26,8 @@ Live map of Israel showing [Pikud HaOref](https://www.oref.org.il) (Home Front C
 | Color | Meaning |
 |-------|---------|
 | 🔴 Red | Rocket/missile fire |
-| 🟣 Purple | Drone/aircraft infiltration |
+| 🟣 Purple | Hostile aircraft / drone |
+| 🟤 Brown | Terrorist infiltration |
 | 🟡 Yellow | Early warning / preparedness — go near your shelter, sirens may follow |
 | 🟢 Green | Event ended (fades out after 1 minute) |
 
