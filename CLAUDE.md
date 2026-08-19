@@ -152,6 +152,20 @@ Do **not** use `cat`/`category` for classification — the same number is reused
 - Threat titles (red `ירי רקטות וטילים`, purple `חדירת כלי טיס עוין`, brown `חדירת מחבלים`) are matched by **substring**, so combined forms like `<threat> - היכנסו למרחב המוגן` classify by threat. The green "ended" check runs first, so `<threat> - האירוע הסתיים` stays green.
 - API sometimes uses double spaces in titles — normalize with `.replace(/\s+/g, ' ')` before matching.
 - Unknown titles default to Red and log a console warning.
+
+### Classification order and the `desc` field
+
+`classifyTitle()` checks buckets in this order, and the order is load-bearing:
+**green → explicit threat → yellow → inherit → unknown(red)**. Yellow must be tested
+*before* inherit: Oref ships pre-alerts with a generic shelter instruction attached, and if
+the inherit check ran first every pre-alert would resolve to red.
+
+**Classify the `title` only — never `title + desc`.** The `desc` is instruction text
+("היכנסו למרחב המוגן"), not a threat descriptor. Concatenating it made the generic shelter
+command outrank the pre-alert title and turned every 🟡 early warning 🔴 red. The desc is
+consulted only when the title classifies as `inherit`, and only via `explicitThreatIn()`,
+which matches the four named threats and returns null for anything else — so an
+unrecognized desc can never manufacture a red.
 - The `היכנסו ... למרחב המוגן` titles and `יש להיכנס למרחב מוגן בזמן ההתגוננות העומד לרשותכם` (matched by substring `בזמן ההתגוננות העומד לרשותכם`) are generic shelter commands and don't specify a threat type. They preserve the location's existing red/purple/brown state; if none, they default to red. These titles never appear in the R2 day-history archive (Oref doesn't push them).
 
 ### Extended History API
