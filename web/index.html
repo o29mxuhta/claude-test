@@ -1549,9 +1549,53 @@ function apiFetch(endpoint) {
   }
 
     
+  // --- Israel focus zone -----------------------------------------------------
+  // A generous, data-derived outline of Israel's inhabited area: the union of
+  // all ~1,449 Oref locality points (web/oref_points.json), buffered outward
+  // ~12 km and simplified, so every city sits safely inside it (verified offline:
+  // 1449/1449 contained). It is deliberately NOT a political border — it
+  // over-covers Israel by a margin, so the surroundings veil can never mute an
+  // Israeli border town; the only real border on the map stays the ISR-filtered
+  // `boundaries_country` line. Two derived features drive the focus effect:
+  //   role:'zone' — the polygon itself, for the warm lift INSIDE Israel.
+  //   role:'mask' — a world-rect with the zone punched out as a hole, for the
+  //                 desaturating veil OUTSIDE Israel.
+  // If the outline ever needs reg[e]nerating, rerun the buffered-union hull over
+  // oref_points.json (margin 0.12°, contour at 0.5, Douglas-Peucker 0.004°).
+  var ISRAEL_ZONE_RINGS = [[[34.9258,29.4446],[34.9758,29.4426],[35.0158,29.4576],[35.0488,29.4877],[35.0824,29.5477],[35.0909,29.5777],[35.0932,29.6477],[35.1059,29.7077],[35.2057,29.9777],[35.2359,30.0377],[35.242,30.0677],[35.2389,30.1077],[35.2259,30.1377],[35.1958,30.1706],[35.1458,30.1997],[35.1354,30.2177],[35.1379,30.2277],[35.2158,30.2576],[35.2458,30.2842],[35.2616,30.3077],[35.272,30.3477],[35.2683,30.4177],[35.3057,30.5477],[35.3416,30.6077],[35.3592,30.6777],[35.398,30.7477],[35.4186,30.8077],[35.4788,30.8677],[35.4989,30.9077],[35.502,30.9477],[35.4959,30.9777],[35.4788,31.0077],[35.4516,31.0377],[35.4445,31.0577],[35.4759,31.1177],[35.4859,31.1577],[35.4774,31.2477],[35.4822,31.3477],[35.5109,31.4377],[35.5122,31.4977],[35.5253,31.5877],[35.5552,31.6477],[35.6024,31.7077],[35.6209,31.7577],[35.6209,31.8377],[35.5959,31.9077],[35.5787,31.9877],[35.6359,32.1277],[35.6609,32.2077],[35.6626,32.3177],[35.6559,32.3777],[35.6709,32.4377],[35.6803,32.5377],[35.6958,32.5654],[35.7498,32.6077],[35.8958,32.7741],[35.9189,32.8177],[35.922,32.8577],[35.9142,32.9177],[35.9489,33.0077],[35.9489,33.0677],[35.9061,33.1477],[35.8989,33.2377],[35.8718,33.3077],[35.8358,33.3506],[35.7858,33.373],[35.6958,33.3718],[35.6058,33.3924],[35.5458,33.3908],[35.5022,33.3677],[35.4458,33.3079],[35.4327,33.2777],[35.4243,33.2177],[35.4058,33.193],[35.3858,33.1896],[35.2958,33.2141],[35.2058,33.2049],[35.1058,33.2041],[35.0558,33.1878],[35.0128,33.1477],[34.9924,33.1077],[34.9595,32.9577],[34.8918,32.9077],[34.8755,32.8877],[34.8575,32.8477],[34.8025,32.6377],[34.7955,32.5677],[34.7427,32.3877],[34.7322,32.3177],[34.6949,32.2177],[34.6829,32.1477],[34.6398,32.0677],[34.5916,31.9377],[34.5458,31.8718],[34.4993,31.7677],[34.4758,31.7409],[34.4218,31.6977],[34.4,31.6677],[34.3893,31.6177],[34.399,31.5477],[34.3874,31.5177],[34.3029,31.4477],[34.2857,31.4177],[34.2715,31.3577],[34.2018,31.3077],[34.1727,31.2577],[34.1727,31.1977],[34.2058,31.104],[34.2423,31.0577],[34.3032,31.0177],[34.3026,30.9977],[34.2807,30.9277],[34.2858,30.8674],[34.3028,30.8377],[34.3379,30.7977],[34.3729,30.7277],[34.4158,30.6919],[34.4658,30.6811],[34.5158,30.6919],[34.5558,30.7242],[34.5759,30.7577],[34.5814,30.8177],[34.558,30.8777],[34.5417,30.9577],[34.4858,31.022],[34.4227,31.0677],[34.4249,31.0777],[34.4358,31.0854],[34.4558,31.0896],[34.5258,31.0907],[34.5594,31.0777],[34.6057,30.9277],[34.6293,30.8777],[34.629,30.8177],[34.6357,30.7877],[34.6529,30.7577],[34.6996,30.7077],[34.6989,30.6877],[34.6807,30.6377],[34.6857,30.5777],[34.7223,30.5277],[34.7658,30.5046],[34.8058,30.5013],[34.8458,30.5119],[34.8798,30.5377],[34.9016,30.5677],[34.912,30.6077],[34.9059,30.6577],[34.8888,30.6877],[34.8493,30.7277],[34.846,30.7477],[34.9188,30.8177],[34.9553,30.8777],[35.0358,30.9366],[35.0958,30.9627],[35.1258,30.9605],[35.2099,30.9277],[35.1458,30.8712],[35.1227,30.8277],[35.1242,30.7277],[35.0857,30.6777],[35.0707,30.6377],[35.0682,30.5777],[35.0507,30.5077],[35.0533,30.4277],[35.0407,30.3777],[35.0358,30.308],[35.02,30.2977],[34.9658,30.2835],[34.9458,30.2706],[34.9157,30.2377],[34.9007,30.1977],[34.9007,30.1577],[34.914,30.0977],[34.9108,30.0077],[34.8857,29.9477],[34.8793,29.9077],[34.8974,29.8077],[34.8727,29.7377],[34.868,29.6577],[34.8455,29.5977],[34.8393,29.5577],[34.8457,29.5177],[34.8629,29.4877],[34.8956,29.4577],[34.9258,29.4446]]];
+  var FOCUS_OUTER = [[-10,0],[60,0],[60,55],[-10,55],[-10,0]];
+  // MapLibre classifies polygon rings into exterior-vs-hole by signed-area
+  // ORIENTATION, not array order: a ring wound the same way as the first ring is
+  // treated as another exterior (filled) polygon rather than a hole. So the veil's
+  // hole must wind OPPOSITE to its outer rect, or Israel would be filled (dimmed)
+  // along with everything else. Normalise here instead of trusting the baked-in
+  // ring direction (the generated outline happens to be CCW, same as the rect).
+  function ringSignedArea(r) {
+    var a = 0, n = r.length, j = n - 1;
+    for (var i = 0; i < n; j = i++) { a += r[j][0] * r[i][1] - r[i][0] * r[j][1]; }
+    return a / 2;
+  }
+  function windRing(r, wantPositive) {
+    return ((ringSignedArea(r) > 0) === wantPositive) ? r : r.slice().reverse();
+  }
+  var FOCUS_GEOJSON = {
+    type: 'FeatureCollection',
+    features: [
+      { type: 'Feature', properties: { role: 'zone' },
+        geometry: { type: 'MultiPolygon',
+          coordinates: ISRAEL_ZONE_RINGS.map(function (r) { return [r]; }) } },
+      { type: 'Feature', properties: { role: 'mask' },
+        geometry: { type: 'Polygon',
+          coordinates: [windRing(FOCUS_OUTER, true)].concat(
+            ISRAEL_ZONE_RINGS.map(function (r) { return windRing(r, false); })) } }
+    ]
+  };
+
  function customizeBasemapLayers(layers, isDark) {
     var cleanLayers = [];
     var seaTextureInjected = false;
+    var brightenInjected = false;
+    var veilInjected = false;
 
     for (var i = 0; i < layers.length; i++) {
       var orig = layers[i];
@@ -1604,6 +1648,27 @@ function apiFetch(endpoint) {
         continue; 
       }
 
+      if (!veilInjected && l.type === 'symbol') {
+        // Desaturating veil OUTSIDE the zone (role:'mask' = the world-rect with
+        // the zone punched out as a hole). Injected right before the first label
+        // layer, so it dims neighbouring land, roads and open sea but leaves every
+        // place label crisp on top; it also sits below the runtime alert layers.
+        // Cool neutral grey in light mode (drains the warm surroundings), near-
+        // black in dark mode (pushes them back). Fills only, never a stroke: the
+        // zone edge is an approximate safety margin, not a border, so a line there
+        // would assert a boundary the map doesn't own.
+        veilInjected = true;
+        cleanLayers.push({
+          id: 'surroundings-dim',
+          type: 'fill',
+          source: 'focus',
+          filter: ['==', ['get', 'role'], 'mask'],
+          paint: {
+            'fill-color': isDark ? '#0c0e13' : '#9aa1a8',
+            'fill-opacity': isDark ? 0.34 : 0.16
+          }
+        });
+      }
       cleanLayers.push(l);
 
       // Lay the wave/stipple texture directly on top of the water fill (and below
@@ -1650,6 +1715,28 @@ function apiFetch(endpoint) {
             'line-opacity': 0.8
           }
         });
+
+        // Warm lift INSIDE the zone (role:'zone'). A low-opacity wash that
+        // enriches Israel's land relative to the desaturated surroundings. Pushed
+        // here (right after the water block) so it sits above earth/landcover/
+        // water but below roads & labels — those are pushed later in the loop, so
+        // they stay crisp on top — and below the runtime alert layers, so it can
+        // never dull an active alert. Colour is a warm amber kept deliberately
+        // faint and far from the SATURATED alert-yellow of a pre-alert; it is the
+        // most likely knob to want tuning.
+        if (!brightenInjected) {
+          brightenInjected = true;
+          cleanLayers.push({
+            id: 'israel-brighten',
+            type: 'fill',
+            source: 'focus',
+            filter: ['==', ['get', 'role'], 'zone'],
+            paint: {
+              'fill-color': isDark ? '#6b6250' : '#f0c088',
+              'fill-opacity': isDark ? 0.16 : 0.10
+            }
+          });
+        }
       }
     }
 
@@ -1770,6 +1857,10 @@ function apiFetch(endpoint) {
         protomaps: {
           type: 'vector',
           url: PMTILES_URL
+        },
+        focus: {
+          type: 'geojson',
+          data: FOCUS_GEOJSON
         }
       },
       layers: customizeBasemapLayers(basemaps.layers('protomaps', flavor, { lang: lang }), isDark)
