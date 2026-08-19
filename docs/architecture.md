@@ -185,7 +185,7 @@ Both produce the same `protomaps` basemap schema — the map code works identica
    ```
    The public URL (`pub-0cb002...r2.dev`) does not change after upload.
 
-3. **Update `maxBounds` in `web/index.html`** to match the new lat extent (e.g. `[[32.0, 10.0], [65.0, 42.0]]` for Yemen coverage).
+3. **Update `maxBounds` in `web/index.html`** to match the new extent (MapLibre `[[west, south], [east, north]]`, e.g. `[[22.0, 3.0], [73.0, 50.0]]` for the current Middle East extract).
 
 #### R2 bucket info
 
