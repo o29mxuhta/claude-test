@@ -1720,9 +1720,11 @@ function apiFetch(endpoint) {
         'riverbank', 'water_body'];
       var IS_INLAND = ['in', ['get', 'kind'], ['literal', INLAND_WATER_KINDS]];
       var IS_SEA = ['!', IS_INLAND];
-      // The mask must be indistinguishable from land. Dark mode uses the stock
-      // `black` theme rather than WARM_DARK_FLAVOR, so read the colour off the
-      // live flavor instead of hard-coding it.
+      // The mask must be indistinguishable from land, so read the colour off the
+      // live flavor rather than hard-coding it — the two flavors disagree
+      // (`#f5f0e8` light / `#2a2a28` dark) and a literal would silently rot if
+      // either is retuned. The fallbacks below mirror them only for the case
+      // where no flavor is passed at all.
       var earthColor = (flavor && flavor.earth) || (isDark ? '#2a2a28' : '#f5f0e8');
 
       var texturePaint = {
@@ -1897,7 +1899,17 @@ function apiFetch(endpoint) {
   });
 
   function buildMapStyle(isDark, lang) {
-   var flavor = isDark ? (basemaps.themes ? basemaps.themes.black : basemaps.BLACK) : WARM_FLAVOR;
+   // Dark mode uses WARM_DARK_FLAVOR, the warm-dark counterpart of WARM_FLAVOR
+   // defined just above. It previously used the stock `basemaps.themes.black`
+   // theme, leaving WARM_DARK_FLAVOR dead code. That mattered once the foreign-
+   // water mask landed: the black theme's `earth` is essentially pure black, so
+   // an opaque earth-coloured mask turned the whole pannable area into a void
+   // outside Israel. It also could not be fixed by lifting the mask colour alone
+   // — with black land inside Israel too, any non-black mask makes the
+   // surroundings LIGHTER than the focus zone, inverting the focus effect.
+   // WARM_DARK_FLAVOR's `#2a2a28` earth reads as land, and `surroundings-dim`
+   // then pushes the neighbours below Israel as intended.
+   var flavor = isDark ? WARM_DARK_FLAVOR : WARM_FLAVOR;
      return {
       version: 8,
       glyphs: 'https://protomaps.github.io/basemaps-assets/fonts/{fontstack}/{range}.pbf',
