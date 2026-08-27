@@ -1586,6 +1586,7 @@ function apiFetch(endpoint) {
   function windRing(r, wantPositive) {
     return ((ringSignedArea(r) > 0) === wantPositive) ? r : r.slice().reverse();
   }
+var RED_SEA_MASK = [[20.0, 10.0], [45.0, 10.0], [45.0, 29.488], [20.0, 29.488], [20.0, 10.0]];
   var FOCUS_GEOJSON = {
     type: 'FeatureCollection',
     features: [
@@ -1595,7 +1596,10 @@ function apiFetch(endpoint) {
       { type: 'Feature', properties: { role: 'mask' },
         geometry: { type: 'Polygon',
           coordinates: [windRing(FOCUS_OUTER, true)].concat(
-            ISRAEL_ZONE_RINGS.map(function (r) { return windRing(r, false); })) } }
+            ISRAEL_ZONE_RINGS.map(function (r) { return windRing(r, false); })) } },
+      // NEW: Geometric mask to hide all seas south of Eilat (Latitude 29.488)
+      { type: 'Feature', properties: { role: 'south-sea-mask' },
+        geometry: { type: 'Polygon', coordinates: [windRing(RED_SEA_MASK, true)] } }
     ]
   };
 
@@ -1796,15 +1800,14 @@ var IS_SEA = ['in', ['get', 'kind'], ['literal', ['ocean', 'sea']]];
         { id: 'coastline', type: 'line', source: wSource,
           'source-layer': wLayer, filter: cp(IS_SEA),
           layout: cp(coastLayout), paint: cp(coastPaint) },
+         // Overwrite the Red Sea & Gulf of Aqaba south of Eilat with solid land color
+        { id: 'south-sea-hide', type: 'fill', source: 'focus',
+          filter: ['==', ['get', 'role'], 'south-sea-mask'],
+          paint: { 'fill-color': earthColor, 'fill-opacity': 1 } },
+        // ----------------------------
 
-        // Warm lift INSIDE the zone (role:'zone'). A low-opacity wash that enriches
-        // Israel's land relative to the desaturated surroundings. Sits above
-        // earth/landcover/water but below roads & labels — those are pushed later
-        // in the loop, so they stay crisp on top — and below the runtime alert
-        // layers, so it can never dull an active alert. Colour is a warm amber kept
-        // deliberately faint and far from the SATURATED alert-yellow of a pre-alert;
-        // it is the most likely knob to want tuning.
-        { id: 'israel-brighten', type: 'fill', source: 'focus',
+        // Warm lift INSIDE the zone (role:'zone'). A low-opacity wash...
+         { id: 'israel-brighten', type: 'fill', source: 'focus',
           filter: ['==', ['get', 'role'], 'zone'],
           paint: { 'fill-color': isDark ? '#6b6250' : '#f0c088',
                    'fill-opacity': isDark ? 0.16 : 0.10 } }
