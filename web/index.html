@@ -1966,10 +1966,10 @@ var map = new maplibregl.Map({
     zoom: savedZoom,
     
     // Pan lock restricted to Egypt, Israel, Jordan, Lebanon, and Syria
-    maxBounds: [
-        [24.0, 21.5],  // Southwest [lng, lat] (Egypt's SW corner)
-        [43.0, 37.5]   // Northeast [lng, lat] (Syria's NE corner)
-    ],
+maxBounds: [
+        [24.0, 22.0], // South-West bound (Covers Egypt down to Sudan and west to Libya)
+        [36.5, 34.0]  // North-East bound (Keeps the northern border framed around Lebanon/Syria)
+   ],
    
     touchPitch: false,
     maxTileCacheZoomLevels: 8,
