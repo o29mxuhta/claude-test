@@ -3,7 +3,7 @@
 <meta charset="utf-8">
 <link rel="icon" href="/icon-32.png" sizes="32x32">
 <link rel="icon" href="/icon-192.png" sizes="192x192">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1">f
 <meta name="theme-color" content="#1a1a2e">
 <title>התרעות פיקוד העורף בזמן אמת</title>
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css">
@@ -1965,17 +1965,20 @@ var map = new maplibregl.Map({
     center: [savedCenter[1], savedCenter[0]], 
     zoom: savedZoom,
 
+    // 1. Tighter bounding box (Stops panning just past the Sinai border)
     maxBounds: [
-        [25.0, 22.0], // Strict South-West corner of Egypt (Libya & Sudan borders)
-        [36.5, 34.0]  // North-East bound (covering Israel and northern borders)
+        [32.0, 28.5], // South-West (East Egypt / Red Sea)
+        [36.5, 33.8]  // North-East (Lebanon / Syria borders)
     ],
+    
+    // 2. Strict minimum zoom (Prevents zooming out to see the void)
+    minZoom: 6.0, 
 
-    minZoom: 5,
     touchPitch: false,
     maxTileCacheZoomLevels: 8,
     fadeDuration: 0,
     attributionControl: false
-  });
+});
 
   // Supply the sea-texture fill-pattern. Registered here, right after construction
   // and before the first frame renders, so the initial style's water texture and
