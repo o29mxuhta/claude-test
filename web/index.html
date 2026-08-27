@@ -1964,16 +1964,15 @@ var map = new maplibregl.Map({
     style: MAP_STYLE,
     center: [savedCenter[1], savedCenter[0]], 
     
-    // Force the map to ignore saved memory if it was zoomed out too far
-    zoom: Math.max(savedZoom, 7.5), 
-    
-    // The magic lock: Prevents wide screens from zooming out into the void
-    minZoom: 7.5, 
+    // Lowered the zoom lock so you can see the whole country at once
+    zoom: Math.max(savedZoom, 6.8), 
+    minZoom: 6.8, 
 
-    // Extremely tight bounds locked specifically to Israel and immediate borders
+    // Relaxed bounds: allows seeing Sinai, Jordan, and southern Lebanon, 
+    // but stops before the western void near Greece/Turkey
     maxBounds: [
-        [33.5, 29.3], // South-West limit (Stops at Sinai/Eilat)
-        [36.3, 33.5]  // North-East limit (Stops at Lebanon/Syria/Jordan)
+        [31.0, 28.0], // South-West (Sinai / Eastern Mediterranean)
+        [37.5, 34.5]  // North-East (Lebanon / Syria / Jordan)
     ],
     
     touchPitch: false,
@@ -1981,7 +1980,7 @@ var map = new maplibregl.Map({
     fadeDuration: 0,
     attributionControl: false
 });
-
+   
   // Supply the sea-texture fill-pattern. Registered here, right after construction
   // and before the first frame renders, so the initial style's water texture and
   // every post-theme-toggle rebuild both get the swatch on demand.
