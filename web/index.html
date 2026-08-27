@@ -1715,12 +1715,29 @@ function apiFetch(endpoint) {
       var cp = function (o) { return JSON.parse(JSON.stringify(o)); };
       var wSource = waterFill.source;
       var wLayer = waterFill['source-layer'] || 'water';
-      var INLAND_WATER_KINDS = ['lake', 'reservoir', 'river', 'stream', 'canal',
-        'pond', 'basin', 'playa', 'dock', 'swimming_pool', 'ditch', 'drain',
-        'riverbank', 'water_body'];
-      var IS_INLAND = ['in', ['get', 'kind'], ['literal', INLAND_WATER_KINDS]];
-      var IS_SEA = ['!', IS_INLAND];
-      // The mask must be indistinguishable from land, so read the colour off the
+var INLAND_WATER_KINDS = [
+  'water',
+  'lake',
+  'reservoir',
+  'river',
+  'stream',
+  'canal',
+  'pond',
+  'basin',
+  'playa',
+  'dock',
+  'swimming_pool',
+  'ditch',
+  'drain',
+  'riverbank',
+  'water_body',
+  'dam'
+];
+
+var IS_INLAND = ['in', ['get', 'kind'], ['literal', INLAND_WATER_KINDS]];
+// Strictly identify open sea/ocean so inland water bodies in neighboring countries are not restored
+var IS_SEA = ['in', ['get', 'kind'], ['literal', ['ocean', 'sea']]];
+       // The mask must be indistinguishable from land, so read the colour off the
       // live flavor rather than hard-coding it — the flavors disagree with each
       // other and a literal would silently rot whenever one is retuned or
       // swapped (dark mode has already been switched between two flavors once).
