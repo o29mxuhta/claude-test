@@ -1721,10 +1721,13 @@ function apiFetch(endpoint) {
       var IS_INLAND = ['in', ['get', 'kind'], ['literal', INLAND_WATER_KINDS]];
       var IS_SEA = ['!', IS_INLAND];
       // The mask must be indistinguishable from land, so read the colour off the
-      // live flavor rather than hard-coding it — the two flavors disagree
-      // (`#f5f0e8` light / `#2a2a28` dark) and a literal would silently rot if
-      // either is retuned. The fallbacks below mirror them only for the case
-      // where no flavor is passed at all.
+      // live flavor rather than hard-coding it — the flavors disagree with each
+      // other and a literal would silently rot whenever one is retuned or
+      // swapped (dark mode has already been switched between two flavors once).
+      // The `||` branch is a defensive last resort for a caller that passes no
+      // flavor at all; it is unreachable from buildMapStyle, and its dark literal
+      // matches WARM_DARK_FLAVOR rather than the black theme that is actually
+      // live, so do NOT read it as documentation of the current dark palette.
       var earthColor = (flavor && flavor.earth) || (isDark ? '#2a2a28' : '#f5f0e8');
 
       var texturePaint = {
@@ -1899,17 +1902,18 @@ function apiFetch(endpoint) {
   });
 
   function buildMapStyle(isDark, lang) {
-   // Dark mode uses WARM_DARK_FLAVOR, the warm-dark counterpart of WARM_FLAVOR
-   // defined just above. It previously used the stock `basemaps.themes.black`
-   // theme, leaving WARM_DARK_FLAVOR dead code. That mattered once the foreign-
-   // water mask landed: the black theme's `earth` is essentially pure black, so
-   // an opaque earth-coloured mask turned the whole pannable area into a void
-   // outside Israel. It also could not be fixed by lifting the mask colour alone
-   // — with black land inside Israel too, any non-black mask makes the
-   // surroundings LIGHTER than the focus zone, inverting the focus effect.
-   // WARM_DARK_FLAVOR's `#2a2a28` earth reads as land, and `surroundings-dim`
-   // then pushes the neighbours below Israel as intended.
-   var flavor = isDark ? WARM_DARK_FLAVOR : WARM_FLAVOR;
+   // Dark mode deliberately uses the stock `basemaps.themes.black` theme, which
+   // leaves WARM_DARK_FLAVOR (defined just above) DEAD CODE. That is intentional
+   // as of 2026-08-26 and was checked: swapping in WARM_DARK_FLAVOR was tried,
+   // on the theory that a black `earth` would make the opaque foreign-water mask
+   // paint a void outside Israel, and reverted — the reported void turned out to
+   // be a basemap COVERAGE gap (PMTiles data starts near lng 30.94 while
+   // maxBounds pans west to 24.0), nothing to do with the mask or the flavor.
+   // Whatever flavor is live is passed into customizeBasemapLayers, which reads
+   // `flavor.earth` for the mask colour, so the mask tracks the theme either way.
+   // If you do wire WARM_DARK_FLAVOR up, treat it as a look change and judge it
+   // in the browser; it is a full palette and has never been seen rendered.
+   var flavor = isDark ? (basemaps.themes ? basemaps.themes.black : basemaps.BLACK) : WARM_FLAVOR;
      return {
       version: 8,
       glyphs: 'https://protomaps.github.io/basemaps-assets/fonts/{fontstack}/{range}.pbf',
