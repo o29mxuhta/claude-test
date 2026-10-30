@@ -219,6 +219,8 @@ body.idle #right-panel { bottom: 12px; gap: 0; }
 .dot-brown  { background: #8b4513; }
 .dot-yellow { background: #ffcc00; }
 .dot-green  { background: #00cc00; }
+.dot-hazmat { background: #009999; } /* PROPOSED color - pending Gil's pick */
+.dot-earthquake { background: #ff8800; } /* PROPOSED color - pending Gil's pick */
 body.panel-open #legend { display: none; }
 
 #timeline-btn {
@@ -769,8 +771,12 @@ var timeToShelterData = {}; // Will be populated dynamically from cities.json
 function updateAlertCache(name, state, since) {
     try {
         var cache = JSON.parse(localStorage.getItem('oref-active-alerts') || '{}');
-        if (state === 'green') delete cache[name];
-        else cache[name] = { state: state, since: since };
+        // Persist the whole simultaneous-threat set. Direct callers that
+        // bypass applyThreatEvent get their single state folded in.
+        var threats = locationThreats[name] || {};
+        if (state !== 'green' && threats[state] === undefined) threats[state] = since;
+        if (Object.keys(threats).length === 0) delete cache[name];
+        else cache[name] = { threats: threats };
         localStorage.setItem('oref-active-alerts', JSON.stringify(cache));
     } catch(e) {}
 }
@@ -783,7 +789,7 @@ function updateAlertCache(name, state, since) {
 function setLocationState(name, state, since) {
     var now = Date.now();
     var effectiveSince = since || now;
-    var PRIORITY = { red: 4, brown: 3, purple: 2, yellow: 1, green: 0 };
+    var PRIORITY = { red: 5, brown: 3, purple: 2, yellow: 1, green: 0, hazmat: 3, earthquake: 4 };
     var existing = locationStates[name];
 
     if (existing && existing.state !== 'green') {
@@ -799,6 +805,9 @@ function setLocationState(name, state, since) {
             if ((PRIORITY[existing.state] || 0) > (PRIORITY[state] || 0)) {
                 existing.since = Math.max(existing.since, effectiveSince);
                 if (typeof updateAlertCache === 'function') updateAlertCache(name, existing.state, existing.since);
+                // The new lower-priority threat still joined the simultaneous
+                // set - repaint so it shows as the border color.
+                applyFeatureStyle(name, existing.state, 0.35, secondThreatOf(name, existing.state));
                 return;
             } else if ((PRIORITY[existing.state] || 0) === (PRIORITY[state] || 0)) {
                 effectiveSince = Math.max(existing.since, effectiveSince);
@@ -810,7 +819,8 @@ function setLocationState(name, state, since) {
     if (typeof updateAlertCache === 'function') updateAlertCache(name, state, effectiveSince);
 
 var fillOp = state === 'green' ? 0.5 : 0.35;
-    applyFeatureStyle(name, state, fillOp);
+    // A second simultaneous threat (locationThreats) shows as the border color.
+    applyFeatureStyle(name, state, fillOp, state === 'green' ? state : secondThreatOf(name, state));
 
 if (state === 'red' || state === 'purple') {
         addTTAMarker(name);
@@ -820,6 +830,69 @@ if (state === 'red' || state === 'purple') {
    if (state !== 'green' && effectiveSince >= now - 10000) {
         playSoundForState(state, name);
     }
+}
+
+// --- Simultaneous threats at one location ---
+// locationStates holds the single DISPLAYED state (existing machinery: fill,
+// TTA marker, sound, cache). locationThreats holds ALL currently active
+// threats so one threat's official end cannot erase another threat's display.
+// A second active threat shows as the polygon border color; when the top
+// threat ends, the next one takes over the fill.
+var locationThreats = {}; // name -> { state: sinceMs }
+
+function topThreats(name) {
+    var t = locationThreats[name];
+    if (!t) return [];
+    var PRI = { red: 5, earthquake: 4, brown: 3, hazmat: 3, purple: 2, yellow: 1 };
+    // Presentation-only tie-break: same tier -> most recently started threat
+    // gets the fill, older one shows as the border. Final fallback is a fixed
+    // name order so the choice is deterministic, not arrival-order luck.
+    return Object.keys(t).sort(function(a, b) {
+        var d = (PRI[b] || 0) - (PRI[a] || 0);
+        if (d) return d;
+        var s = (t[b] || 0) - (t[a] || 0);
+        if (s) return s;
+        return a < b ? -1 : 1;
+    });
+}
+
+// The active threat below the displayed one (drives the border color), or
+// the displayed one when it is the only active threat.
+function secondThreatOf(name, displayed) {
+    var list = topThreats(name);
+    for (var i = 0; i < list.length; i++) { if (list[i] !== displayed) return list[i]; }
+    return displayed;
+}
+
+// Apply one classified (already inherit-resolved) event to a location.
+// A threat-specific end title ("אירוע חומרים מסוכנים הסתיים") ends ONLY that
+// threat; a generic end ("האירוע הסתיים", "ניתן לצאת מהמרחב המוגן") clears
+// every active threat at the location (existing all-clear semantics).
+function applyThreatEvent(name, title, state, since) {
+    var threats = locationThreats[name] || (locationThreats[name] = {});
+    if (state === 'green') {
+        // Same staleness guard as setLocationState: a lagging history-feed
+        // all-clear must not kill a fresher live alert.
+        var existing = locationStates[name];
+        if (existing && existing.state !== 'green' && since && since < existing.since) return existing.state;
+        var endThreat = explicitThreatIn(title); // null when the end names no threat
+        if (endThreat) { delete threats[endThreat]; }
+        else { for (var k in threats) delete threats[k]; }
+        var remaining = topThreats(name);
+        if (remaining.length === 0) {
+            delete locationThreats[name];
+            delete locationStates[name]; // let the green apply past priority guards
+            setLocationState(name, 'green', since);
+            return 'green';
+        }
+        // One threat ended but another is still active - keep displaying it.
+        delete locationStates[name]; // bypass priority guards for the downgrade
+        setLocationState(name, remaining[0], threats[remaining[0]]);
+        return remaining[0];
+    }
+    threats[state] = since || Date.now();
+    setLocationState(name, state, since);
+    return state;
 }
 
 // ==========================================
@@ -995,7 +1068,7 @@ function updateLiveStatus() {
         activeZonesCount++;
         if ((P[s] || 0) > bestP) { bestP = P[s] || 0; dominant = s; }
       }
-      if ((s === 'red' || s === 'purple' || s === 'brown') && locationPopulations) {
+      if ((s === 'red' || s === 'purple' || s === 'brown' || s === 'hazmat' || s === 'earthquake') && locationPopulations) {
         var pop = locationPopulations[name];
         if (pop) residentTotal += pop;
       }
@@ -1247,6 +1320,8 @@ try {
     <div class="row"><div class="dot dot-purple"></div><span>חדירת כטב״מ</span></div>
     <div class="row"><div class="dot dot-brown"></div><span>חדירת מחבלים</span></div>
     <div class="row"><div class="dot dot-yellow"></div><span>התרעה מוקדמת</span></div>
+    <div class="row"><div class="dot dot-hazmat"></div><span>חומרים מסוכנים</span></div>
+    <div class="row"><div class="dot dot-earthquake"></div><span>רעידת אדמה</span></div>
     <div class="row"><div class="dot dot-green"></div><span>האירוע הסתיים</span></div>
   </div>
   <div id="timeline-btn" title="ציר זמן">
@@ -2147,8 +2222,7 @@ map.on('style.load', function() {
 
        // 6. Refresh visuals
         for (var name in locationStates) {
-            var entry = locationStates[name];
-            applyFeatureStyle(name, entry.state, entry.state === 'green' ? 0.5 : 0.3);
+            liveRestyle(name);
         }
 
         // 🚨 ADD THIS LINE: Restores the heatmap if the user was using it!
@@ -2196,9 +2270,7 @@ map.on('style.load', function() {
         if (e.sourceId === 'alerts-source' && e.isSourceLoaded) {
             if (typeof isLiveMode !== 'undefined' && isLiveMode) {
                 for (var loc in locationStates) {
-                    var entry = locationStates[loc];
-                    var opacity = entry.state === 'green' ? 0.5 * Math.max(0, 1 - ((Date.now() - entry.since) / GREEN_FADE_MS)) : 0.3;
-                    applyFeatureStyle(loc, entry.state, opacity);
+                    liveRestyle(loc);
                 }
             }
         }
@@ -3042,7 +3114,7 @@ function todayDateStr() {
   };
 
   // --- Colors ---
-  var COLORS = { red: '#ff0000', brown: '#8b4513', purple: '#9922cc', yellow: '#ffcc00', green: '#00cc00' };
+  var COLORS = { red: '#ff0000', brown: '#8b4513', purple: '#9922cc', yellow: '#ffcc00', green: '#00cc00', hazmat: '#009999', earthquake: '#ff8800' }; // hazmat/earthquake colors PROPOSED - pending Gil's pick
   // --- Sound ---
   function getAudioContext() {
     if (!audioCtx) {
@@ -3375,7 +3447,11 @@ function buildPolygons(data, onReady) {
     { term: 'ירי רקטות וטילים',    state: 'red' },
     { term: 'נשק לא קונבנציונלי',  state: 'red' },
     { term: 'חדירת כלי טיס עוין',  state: 'purple' },
-    { term: 'חדירת מחבלים',        state: 'brown' }
+    { term: 'חדירת מחבלים',        state: 'brown' },
+    // New scenarios (community-observed oref titles): hazmat + earthquake.
+    // Substring match also covers "אירוע חומרים מסוכנים" and combined forms.
+    { term: 'חומרים מסוכנים',        state: 'hazmat' },
+    { term: 'רעידת אדמה',            state: 'earthquake' }
   ];
 
   // Generic shelter commands — they specify no threat type.
@@ -3457,7 +3533,7 @@ function buildPolygons(data, onReady) {
   function resolveInheritedState(state, name) {
     if (state !== 'inherit') return state;
     var existing = locationStates[name];
-    if (existing && (existing.state === 'red' || existing.state === 'purple' || existing.state === 'brown')) {
+    if (existing && (existing.state === 'red' || existing.state === 'purple' || existing.state === 'brown' || existing.state === 'hazmat' || existing.state === 'earthquake')) {
       return existing.state;
     }
     return 'red';
@@ -3472,18 +3548,36 @@ function loadCachedAlerts() {
         
         for (var name in cache) {
             var entry = cache[name];
-            
-            // SMART EXPIRATION: Drones/Terrorists stay for 6 hours waiting for Hazlash. Rockets clear after 30 mins.
-            var maxAge = (entry.state === 'purple' || entry.state === 'brown') ? 6 * 3600000 : 30 * 60000;
-            
-            if (now - entry.since > maxAge) {
-                delete cache[name]; // Too old, let it go
-                continue;
+            // Current format stores the threat set; accept the legacy
+            // single-state shape too so an older cache still loads.
+            var threatMap = entry.threats || (entry.state ? (function(){ var m = {}; m[entry.state] = entry.since; return m; })() : null);
+            if (!threatMap) { delete cache[name]; continue; }
+
+            var kept = {};
+            for (var st in threatMap) {
+                var since = threatMap[st];
+                var age = now - since;
+                if (st === 'hazmat' || st === 'earthquake') {
+                    // Prolonged events: restore regardless of age; past the
+                    // default window they render dimmed (stale cue) until an
+                    // official end title removes them.
+                    kept[st] = since;
+                } else {
+                    // SMART EXPIRATION (unchanged): Drones/Terrorists stay for
+                    // 6 hours waiting for Hazlash. Rockets clear after 30 mins.
+                    var maxAge = (st === 'purple' || st === 'brown') ? 6 * 3600000 : 30 * 60000;
+                    if (age <= maxAge) kept[st] = since;
+                }
             }
-            
+            var keptStates = Object.keys(kept);
+            if (keptStates.length === 0) { delete cache[name]; continue; }
+
             // Inject back into live memory
-            locationStates[name] = { state: entry.state, since: entry.since };
-            applyFeatureStyle(name, entry.state, 0.35);
+            locationThreats[name] = kept;
+            var top = topThreats(name)[0];
+            locationStates[name] = { state: top, since: kept[top] };
+            var topStale = (top === 'hazmat' || top === 'earthquake') && (now - kept[top] > 30 * 60000);
+            applyFeatureStyle(name, top, topStale ? 0.15 : 0.35, secondThreatOf(name, top));
             loaded++;
         }
         localStorage.setItem('oref-active-alerts', JSON.stringify(cache)); // Save cleaned cache
@@ -3496,13 +3590,31 @@ function loadCachedAlerts() {
 }
 
   // --- Marker management (feature-state) ---
-function applyFeatureStyle(name, state, opacity) {
+// Re-apply the current live style for one location: fill color from its
+// state, border from the second active threat, green fade, and the dimmed
+// stale cue for prolonged hazmat/earthquake events past the default window.
+function liveRestyle(name) {
+    var entry = locationStates[name];
+    if (!entry) return;
+    var now = Date.now();
+    var opacity;
+    if (entry.state === 'green') {
+        opacity = 0.5 * Math.max(0, 1 - ((now - entry.since) / GREEN_FADE_MS));
+    } else if ((entry.state === 'hazmat' || entry.state === 'earthquake') && now - entry.since > 30 * 60000) {
+        opacity = 0.15;
+    } else {
+        opacity = 0.3;
+    }
+    applyFeatureStyle(name, entry.state, opacity, entry.state === 'green' ? entry.state : secondThreatOf(name, entry.state));
+}
+
+function applyFeatureStyle(name, state, opacity, lineState) {
     var id = nameToId[name];
     if (id === undefined) return;
     map.setFeatureState({ source: 'alerts-source', id: id }, {
       fillColor: COLORS[state],
       fillOpacity: opacity,
-      lineColor: COLORS[state],
+      lineColor: COLORS[lineState || state],
       // 🚨 Boost the line opacity to 0.9 so the neon stays bright even when the inner fill fades!
       lineOpacity: state === 'green' ? opacity : 0.9
     });
@@ -3600,6 +3712,9 @@ function applyFeatureStyle(name, state, opacity) {
    
   function displayLabel(title) {
     var norm = (title || '').replace(/\s+/g, ' ').trim();
+    // Hazmat/earthquake: the row's color + legend carry the category; the text
+    // stays the verbatim official message (never collapsed to a short label).
+    if (norm.indexOf('חומרים מסוכנים') !== -1 || norm.indexOf('רעידת אדמה') !== -1) return norm;
     if (TITLE_LABELS[norm]) return TITLE_LABELS[norm];
     var keys = Object.keys(TITLE_LABELS);
     for (var i = 0; i < keys.length; i++) {
@@ -3771,11 +3886,7 @@ function _removePanelHighlight() {
     var name = _panelHighlightName;
     var entry = locationStates[name];
     if (entry) {
-        var now = Date.now();
-        var opacity = entry.state === 'green'
-            ? 0.5 * Math.max(0, 1 - ((now - entry.since) / GREEN_FADE_MS))
-            : 0.3;
-        applyFeatureStyle(name, entry.state, opacity);
+        liveRestyle(name);
     } else {
         resetFeatureStyle(name);
     }
@@ -4464,7 +4575,7 @@ function expandAndResolveLocations(rawLocations) {
 
       // 🚨 THE STICKY HANDOFF: Passes the alert to our new memory function
       if (isLiveMode) {
-        setLocationState(loc, locState);
+        applyThreatEvent(loc, cleanTitle, locState);
         processedCount++;
       } else if (liveLocationStates) {
         updateShadowState(loc, locState);
@@ -4776,7 +4887,7 @@ function processHistoryEntry(entry) {
     // 🚨 GLOBAL CLEAR SAFETY NET: If Oref sends "All Regions Clear", wipe the board
     if (state === 'green' && (locations.includes('כלל האזורים') || locations.includes('כלל היישובים'))) {
         for (var activeCity in locationStates) {
-            setLocationState(activeCity, 'green', ts);
+            applyThreatEvent(activeCity, cleanTitle, 'green', ts);
         }
         return;
     }
@@ -4800,7 +4911,7 @@ function processHistoryEntry(entry) {
       if (nameToId[loc] !== undefined) {
           var locState = resolveInheritedState(state, loc);
           if (isLiveMode) {
-            setLocationState(loc, locState, ts);
+            applyThreatEvent(loc, cleanTitle, locState, ts);
           } else if (liveLocationStates) {
             updateShadowState(loc, locState, ts);
           }
@@ -5023,7 +5134,7 @@ function processEntries(entries) {
     // Must include brown — omitting it made PRIORITY['brown'] fall back to 0,
     // so terrorist-infiltration alerts were silently discarded during replay
     // whenever any other state was already active at that location.
-    var PRIORITY = { red: 4, brown: 3, purple: 2, yellow: 1, green: 0 };
+    var PRIORITY = { red: 5, brown: 3, purple: 2, yellow: 1, green: 0, hazmat: 3, earthquake: 4 };
     for (var i = 0; i < extendedHistory.length; i++) {
       var e = extendedHistory[i];
       if (e.alertDate > targetTime) break;
@@ -5032,7 +5143,7 @@ function processEntries(entries) {
       // position, defaulting to red.
       var eState = e.state;
       if (eState === 'inherit') {
-        eState = (existing && (existing.state === 'red' || existing.state === 'purple' || existing.state === 'brown'))
+        eState = (existing && (existing.state === 'red' || existing.state === 'purple' || existing.state === 'brown' || existing.state === 'hazmat' || existing.state === 'earthquake'))
           ? existing.state
           : 'red';
       }
@@ -5104,7 +5215,7 @@ function processEntries(entries) {
 
   function updateShadowState(name, state, since) {
     if (!liveLocationStates) return;
-    var PRIORITY = { red: 4, brown: 3, purple: 2, yellow: 1, green: 0 };
+    var PRIORITY = { red: 5, brown: 3, purple: 2, yellow: 1, green: 0, hazmat: 3, earthquake: 4 };
     var existing = liveLocationStates[name];
     if (existing) {
       if (state === 'green') {
@@ -5140,7 +5251,7 @@ function processEntries(entries) {
 
     container.classList.add('has-data');
     
-    var TICK_COLORS = { red: '#e74c3c', brown: '#8b4513', purple: '#9b59b6', yellow: '#f1c40f', green: '#2ecc71' };
+    var TICK_COLORS = { red: '#e74c3c', brown: '#8b4513', purple: '#9b59b6', yellow: '#f1c40f', green: '#2ecc71', hazmat: '#009999', earthquake: '#ff8800' };
     var PLAY_SPEED = 510;
 
     function updateDateNav() {
@@ -5931,7 +6042,9 @@ function processEntries(entries) {
   // --- Init ---
 
 document.addEventListener('DOMContentLoaded', function() {
-      if (!localStorage.getItem('oref-beta-dismissed')) {
+      // Banner shows on every page load (per product decision); the close
+      // button hides it for the current session only, no persistence.
+      {
           var banner = document.createElement('div');
           
           // 🚨 THE FIX: Give it the ID so our CSS can find it!
@@ -5961,7 +6074,6 @@ document.addEventListener('DOMContentLoaded', function() {
           document.getElementById('beta-close').addEventListener('click', function() {
               banner.style.opacity = '0';
               setTimeout(function() { banner.remove(); }, 300);
-              localStorage.setItem('oref-beta-dismissed', 'true');
           });
       }
   })
@@ -6588,9 +6700,7 @@ function reSyncAlertStates() {
     
     // Clear previous state just in case
     for (var name in locationStates) {
-        var entry = locationStates[name];
-        var opacity = entry.state === 'green' ? 0.5 : 0.3;
-        applyFeatureStyle(name, entry.state, opacity);
+        liveRestyle(name);
     }
 }
 
@@ -6747,6 +6857,12 @@ document.addEventListener('DOMContentLoaded', function() {
     <button id="dev-test-lebanon-btn" style="padding: 10px 16px; background: #eab308; color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 13px; width: 100%; box-shadow: 0 2px 4px rgba(234,179,8,0.3);">
       ⚠️ טסט איום מלבנון (Yellow)
     </button>
+    <button id="dev-test-hazmat-btn" style="padding: 10px 16px; background: #009999; color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 13px; width: 100%; box-shadow: 0 2px 4px rgba(0,153,153,0.3);">
+      🧪 טסט חומ״ס (Teal)
+    </button>
+    <button id="dev-test-earthquake-btn" style="padding: 10px 16px; background: #ff8800; color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 13px; width: 100%; box-shadow: 0 2px 4px rgba(255,136,0,0.3);">
+      🌍 טסט רעידת אדמה (Orange)
+    </button>
     <button id="dev-test-allclear-btn" style="padding: 10px 16px; background: #22c55e; color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 13px; width: 100%; box-shadow: 0 2px 4px rgba(34,197,94,0.3);">
       ✅ טסט סיום אירוע (All Clear)
     </button>
@@ -6867,6 +6983,28 @@ document.addEventListener('DOMContentLoaded', function() {
   });
 
 // 7. All Clear (Hazlash) Button
+  // Hazmat Test Button
+  document.getElementById('dev-test-hazmat-btn').addEventListener('click', function() {
+      triggerTestAlert({
+          id: "TEST_" + Date.now(),
+          cat: "6",
+          title: "חומרים מסוכנים - היכנסו למרחב המוגן",
+          data: ["אשדוד - איזור תעשייה צפוני"],
+          desc: "היכנסו למרחב המוגן"
+      });
+  });
+
+  // Earthquake Test Button
+  document.getElementById('dev-test-earthquake-btn').addEventListener('click', function() {
+      triggerTestAlert({
+          id: "TEST_" + Date.now(),
+          cat: "3",
+          title: "רעידת אדמה",
+          data: ["טבריה", "בית שאן"],
+          desc: "רעידת אדמה"
+      });
+  });
+
   document.getElementById('dev-test-allclear-btn').addEventListener('click', function() {
       // 1. Ask the engine which cities are currently active
       var activeLocs = [];
@@ -6909,6 +7047,7 @@ function removeLocation(name) {
     if (locationStates[name]) {
         delete locationStates[name];
     }
+    delete locationThreats[name];
     // Also drop the persisted copy, otherwise a cleared or expired alert is
     // restored as active on the next page load.
     if (typeof updateAlertCache === 'function') updateAlertCache(name, 'green', Date.now());

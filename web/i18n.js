@@ -189,6 +189,14 @@
   "The event has ended",
   "Событие завершено"
  ],
+ "חומרים מסוכנים": [
+  "Hazardous materials",
+  "Опасные материалы"
+ ],
+ "רעידת אדמה": [
+  "Earthquake",
+  "Землетрясение"
+ ],
  "ציר זמן": [
   "Timeline",
   "Шкала времени"
@@ -504,6 +512,14 @@
  "⚠️ טסט איום מלבנון (Yellow)": [
   "⚠️ Lebanon threat test (Yellow)",
   "⚠️ Тест угрозы из Ливана (жёлтый)"
+ ],
+ "🧪 טסט חומ״ס (Teal)": [
+  "🧪 Hazardous materials test (Teal)",
+  "🧪 Тест опасных материалов (бирюзовый)"
+ ],
+ "🌍 טסט רעידת אדמה (Orange)": [
+  "🌍 Earthquake test (Orange)",
+  "🌍 Тест землетрясения (оранжевый)"
  ],
  "✅ טסט סיום אירוע (All Clear)": [
   "✅ Event end test (All Clear)",

@@ -159,6 +159,8 @@ const THREAT_TERMS = [
   'נשק לא קונבנציונלי',
   'חדירת כלי טיס עוין',
   'חדירת מחבלים',
+  'חומרים מסוכנים',
+  'רעידת אדמה',
 ];
 
 // Generic shelter commands. They specify no threat type, so the client resolves
