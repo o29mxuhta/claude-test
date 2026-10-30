@@ -20,7 +20,13 @@ Live map of Israel showing [Pikud HaOref](https://www.oref.org.il) (Home Front C
 | 🟣 Purple | Hostile aircraft / drone |
 | 🟤 Brown | Terrorist infiltration |
 | 🟡 Yellow | Early warning / preparedness - go near your shelter, sirens may follow |
+| 🩵 Teal (#009999) | Hazardous materials |
+| 🟠 Orange (#ff8800) | Earthquake |
 | 🟢 Green | Event ended (fades out after 2 minutes) |
+
+When two threats are active at the same location, the area fill shows the higher-priority one (rocket fire above all others) and the border shows the other. Hazardous-materials and earthquake alerts can be prolonged events, so they stay on the map until an official "event ended" message (older than 30 minutes they are shown dimmed, as a stale cue) - the 30-minute rocket/yellow and 6-hour drone/terrorist expiry rules are unchanged. The exact official alert payloads for these two categories have not been verified against a live event yet; an unrecognized alert still falls back to red.
+
+The developer tools panel (enable `oref-dev-tools` in localStorage) includes a local test button for each alert type, including the two new ones. Test buttons inject local simulated payloads only - they never send public or external notifications.
 
 ### Experimental features
 
