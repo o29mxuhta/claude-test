@@ -1498,6 +1498,21 @@ try {
 // 2. Adjust this if your custom proxy uses a different route path (or leave empty if it handles endpoints at the root)
 var apiPrefix = '/api'; 
 
+var concurrentReads = Object.create(null);
+function fetchConcurrentRead(key, url, options, sameTaskOnly) {
+    var pending = concurrentReads[key];
+    if (!pending) {
+        pending = fetch(url, options);
+        concurrentReads[key] = pending;
+        function release() {
+            if (concurrentReads[key] === pending) delete concurrentReads[key];
+        }
+        if (sameTaskOnly) setTimeout(release, 0);
+        else pending.then(release, release);
+    }
+    return pending.then(function(response) { return response.clone(); });
+}
+
 function apiFetch(endpoint) {
     var url = PROXY_BASE + apiPrefix + '/' + endpoint;
 
@@ -1513,7 +1528,7 @@ function apiFetch(endpoint) {
     // indistinguishable — the map would look calm and the status indicator
     // would report "connected" while the feed was dead. Callers are responsible
     // for surfacing the error; see fetchLiveAlerts / fetchHistory.
-    return fetch(url, { cache: 'no-store' }) // Force browser not to cache
+    return fetchConcurrentRead('api:' + endpoint, url, { cache: 'no-store' }, true)
         .then(function(resp) {
             if (!resp.ok) {
                 var err = new Error('HTTP ' + resp.status);
@@ -5225,7 +5240,7 @@ function processEntries(entries) {
 
     (cached
       ? Promise.resolve(cached)
-      : fetch('/api/day-history?date=' + dateParam)
+      : fetchConcurrentRead('day:' + dateParam, '/api/day-history?date=' + dateParam)
           .then(function(resp) {
             if (resp.status === 404) {
               console.log('No day-history data for', dateParam);
