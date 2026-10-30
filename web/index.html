@@ -5318,13 +5318,15 @@ function processEntries(entries) {
       } else {
         ticksEl.innerHTML = '';
         slider.value = 999;
-        // Clear alert colors left over from a previously viewed day. Without
-        // this, a day with no entries kept the last busy day's polygons lit
-        // while the label said there was no data for the date.
-        for (var staleName in locationStates) {
-          resetFeatureStyle(staleName);
+        if (!isViewingToday()) {
+          // Clear alert colors left over from a previously viewed day. Without
+          // this, a day with no entries kept the last busy day's polygons lit
+          // while the label said there was no data for the date.
+          for (var staleName in locationStates) {
+            resetFeatureStyle(staleName);
+          }
+          locationStates = {};
         }
-        locationStates = {};
 
         if (isViewingToday()) {
           label.textContent = 'אין התרעות היום'; 
