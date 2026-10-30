@@ -3267,4 +3267,3978 @@ function todayDateStr() {
     if (dangerBuffer) {
       playSequence(dangerBuffer);
     } else {
-      fetch('mi
+      fetch('mixkit-clear-announce-tones-2861.wav')
+        .then(function(r) { 
+          if (!r.ok) throw new Error('Fetch failed');
+          return r.arrayBuffer(); 
+        })
+        .then(function(b) { return ctx.decodeAudioData(b); })
+        .then(function(buffer) {
+          dangerBuffer = buffer;
+          playSequence(dangerBuffer);
+        })
+        .catch(function(err) { 
+          console.error('Failed to play danger WAV, falling back to sine:', err);
+          playFallback();
+        });
+    }
+  }
+
+  function playAllClearSound() {
+    var ctx = getAudioContext();
+    if (!ctx) return;
+    // First tone: C5 (523 Hz)
+    var osc1 = ctx.createOscillator();
+    var gain1 = ctx.createGain();
+    osc1.type = 'sine';
+    osc1.frequency.value = 523;
+    gain1.gain.setValueAtTime(0.25, ctx.currentTime);
+    gain1.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.2);
+    osc1.connect(gain1);
+    gain1.connect(ctx.destination);
+    osc1.start(ctx.currentTime);
+    osc1.stop(ctx.currentTime + 0.2);
+    // Second tone: E5 (659 Hz)
+    var osc2 = ctx.createOscillator();
+    var gain2 = ctx.createGain();
+    osc2.type = 'sine';
+    osc2.frequency.value = 659;
+    gain2.gain.setValueAtTime(0.25, ctx.currentTime + 0.2);
+    gain2.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.45);
+    osc2.connect(gain2);
+    gain2.connect(ctx.destination);
+    osc2.start(ctx.currentTime + 0.2);
+    osc2.stop(ctx.currentTime + 0.45);
+  }
+
+  function playSoundForState(state, locationName) {
+    if (!initialized || soundMuted || !isLiveMode) return;
+
+    // Filter by location if a specific one is selected
+    if (soundLocation && soundLocation !== 'all' && locationName !== soundLocation) {
+      return;
+    }
+
+    var now = Date.now();
+    if (now - lastSoundTime < 500) return;
+    lastSoundTime = now;
+    if (state === 'green') {
+      playAllClearSound();
+    } else {
+      playDangerSound();
+    }
+  }
+
+  // --- Israel bounding box (for GPS validation) ---
+  function isInIsrael(latlng) {
+    return latlng[0] >= 29.4 && latlng[0] <= 33.4 && latlng[1] >= 34.2 && latlng[1] <= 35.9;
+  }
+
+  // --- Location name normalization -------------------------------------------
+  //
+  // Oref location strings and our polygon keys name the same places but do not
+  // always agree byte-for-byte. Observed and defended-against differences:
+  //
+  //   * Bidi control marks (RLM/LRM/isolates) wrapping or splitting the name.
+  //     They are invisible and are NOT matched by \s, so when present they
+  //     broke essentially every lookup.
+  //   * Geresh/gershayim: ASCII ' and '' vs Hebrew ׳/״. The API used
+  //     the Hebrew forms for several days in March 2026 (docs/oref-sources.md)
+  //     and may do so again.
+  //   * Hyphens: ASCII -, Hebrew maqaf ־, and the ‐..― / −
+  //     dash family, with or without surrounding spaces.
+  //   * NBSP and other exotic spaces, and doubled spaces.
+  //
+  // normalizeName() folds all of that into one canonical display form.
+  // foldName() goes further and drops every separator, giving a key that is
+  // insensitive to spacing, dashes, commas and quotes.
+
+  // Bidi/zero-width controls: ZWSP..RLM, ALM, embeddings/overrides, isolates, BOM.
+  var BIDI_MARKS_RE = /[​-‏؜‪-‮⁦-⁩﻿]/g;
+  // Hebrew maqaf, the general-punctuation dash family, minus sign, compat hyphens.
+  var DASH_RE = /[־‐-―−﹘﹣－]/g;
+  // NBSP, NNBSP, en/em spaces and friends.
+  var ODD_SPACE_RE = /[   -   　]/g;
+
+  function normalizeName(s) {
+    if (s === null || s === undefined) return '';
+    var out = String(s);
+    if (out.normalize) out = out.normalize('NFC');
+    return out
+      .replace(BIDI_MARKS_RE, '')
+      .replace(DASH_RE, '-')
+      .replace(ODD_SPACE_RE, ' ')
+      .replace(/״/g, "''")
+      .replace(/[“”]/g, "''")
+      .replace(/׳/g, "'")
+      .replace(/[‘’]/g, "'")
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  // Aggressive fold: canonical form with every separator removed.
+  function foldName(s) {
+    return normalizeName(s).replace(/[-\s,."']/g, '');
+  }
+
+  // Legacy alias. No in-tree callers remain, but the old name is kept because
+  // it was the only normalizer for a long time — anything reintroduced from an
+  // older revision keeps working, and gets the full normalization for free.
+  function normalizeGeresh(s) {
+    return normalizeName(s);
+  }
+
+  // --- Name index -------------------------------------------------------------
+  //   nameIndex.exact : folded name      -> [polygon key, ...]
+  //   nameIndex.base  : folded base city -> [polygon key, ...]
+  var nameIndex = { exact: {}, base: {}, zone: {} };
+
+  function indexPush(bucket, key, value) {
+    if (!key) return;
+    var list = bucket[key] || (bucket[key] = []);
+    if (list.indexOf(value) === -1) list.push(value);
+  }
+
+  function buildNameIndex(polygonNames, citiesData) {
+    var exact = {}, base = {}, zone = {};
+
+    for (var i = 0; i < polygonNames.length; i++) {
+      var key = polygonNames[i];
+      indexPush(exact, foldName(key), key);
+
+      // Register the pre-dash base so a city-wide alert fans out to its zones.
+      // Large cities (ירושלים, חיפה, תל אביב) exist ONLY as subzone
+      // polygons, so without this a city-wide alert lit one arbitrary sliver.
+      var norm = normalizeName(key);
+      var dash = norm.indexOf('-');
+      if (dash > 0) {
+        var baseCity = norm.slice(0, dash).trim();
+        if (baseCity.length >= 2) indexPush(base, foldName(baseCity), key);
+      }
+    }
+
+    // cities.json is Oref's own catalogue: `value` is what the feed emits and
+    // `name` is the display form. Register both as aliases, but only when they
+    // fold onto exactly one existing polygon -- never invent a mapping.
+    if (citiesData && citiesData.length) {
+      for (var c = 0; c < citiesData.length; c++) {
+        var city = citiesData[c];
+        if (!city || city.value === 'all') continue;
+        var forms = [city.value, city.name];
+        var target = null;
+        for (var f = 0; f < forms.length; f++) {
+          var hit = forms[f] ? exact[foldName(forms[f])] : null;
+          if (hit && hit.length === 1) { target = hit[0]; break; }
+        }
+        if (!target) continue;
+        for (var g = 0; g < forms.length; g++) {
+          if (forms[g]) indexPush(exact, foldName(forms[g]), target);
+        }
+        // District ("zone") membership, so a district-wide alert can light all
+        // of its towns. Consulted only after exact and base lookups, so the two
+        // names that are both a district and a town ("לכיש", "אילת")
+        // still resolve to the town.
+        if (city.zone) indexPush(zone, foldName(city.zone), target);
+      }
+    }
+
+    nameIndex = { exact: exact, base: base, zone: zone };
+    if (typeof console !== 'undefined' && console.log) {
+      console.log('\u{1F5FA}️ Name index: ' + Object.keys(exact).length + ' names, ' +
+                  Object.keys(base).length + ' base cities, ' +
+                  Object.keys(zone).length + ' districts');
+    }
+    return nameIndex;
+  }
+
+  // --- Build pre-computed polygons from locations_polygons.json ---
+  // Coordinates in locations_polygons.json are already [lng, lat] — GeoJSON order
+    
+var nameToId = {};   // name → numeric feature id (for setFeatureState)
+  var cachedCitiesData = null; // cities.json, kept for buildNameIndex aliases
+  var pendingPolygonCallback = null;
+
+function buildPolygons(data, onReady) {
+   console.log("DEBUG: Building polygons for", Object.keys(data).length, "locations.");
+    if (!mapLoaded) {
+      pendingPolygonData = data;
+      if (onReady) pendingPolygonCallback = onReady;
+      return;
+    }
+    
+    if (data._populations) {
+      locationPopulations = data._populations;
+    }
+    
+    var features = [];
+    var fid = 0;
+    
+    for (var name in data) {
+      var safeName = name.toLowerCase();
+      
+      // 🚨 THE ULTIMATE BLANKET BANISHER: Use .includes() to catch EVERYTHING
+      if (safeName.includes('border') || safeName.includes('israel') || safeName.includes('ישראל')) {
+          continue; 
+      }
+
+      var coords = data[name];
+      if (!Array.isArray(coords)) continue;
+      var isNested = Array.isArray(coords[0][0]);
+      var polygonCoords = isNested ? coords : [coords];
+      
+      var feature = {
+        type: 'Feature',
+        id: fid,
+        properties: { name: name },
+        geometry: { type: 'Polygon', coordinates: polygonCoords }
+      };
+      
+      features.push(feature);
+      featureMap[name] = feature;
+      nameToId[name] = fid;
+      fid++;
+    }
+    
+    // Build the name -> polygon index now that featureMap is populated.
+    // cachedCitiesData is set by the startup Promise.all; it may be null on the
+    // first call if polygons win the race, in which case the cities loader
+    // rebuilds the index.
+    buildNameIndex(Object.keys(featureMap), cachedCitiesData);
+
+    polygonsGeoJSON.features = features;
+    updateMapLibreSource();
+    if (onReady) onReady();
+  }
+    
+  // --- Title classification (RTL Safe) ---
+  //
+  // Classification is by TITLE TEXT ONLY. Category numbers (`cat`/`category`)
+  // are deliberately NOT used: the same number means different things in the
+  // live API and the history API, so trusting it misclassifies alerts. See
+  // CLAUDE.md § "Category numbers are unreliable".
+  //
+  // Matching is by substring, because Oref ships combined forms such as
+  // "ירי רקטות וטילים - היכנסו למרחב המוגן". Order matters:
+  //   green → threat → inherit → yellow → red (default)
+  // The green check runs first so "<threat> - האירוע הסתיים" stays green.
+  //
+  // Returns 'red' | 'purple' | 'brown' | 'yellow' | 'green' | 'inherit'.
+  // 'inherit' means the title is a generic shelter command that names no threat
+  // type; the caller resolves it per-location via resolveInheritedState().
+  //
+  // Keep in sync with isKnownTitle() in functions/api/_proxy.js.
+
+  var GREEN_TERMS = [
+    'הסתיים',              // covers "האירוע הסתיים" and "אירוע חדירת מחבלים הסתיים"
+    'החשש הוסר',
+    'יכולים לצאת',
+    'אינם צריכים לשהות',
+    'סיום שהייה בסמיכות'
+  ];
+
+  // Threat titles, matched by substring so combined forms classify by threat.
+  var THREAT_TERMS = [
+    { term: 'ירי רקטות וטילים',    state: 'red' },
+    { term: 'נשק לא קונבנציונלי',  state: 'red' },
+    { term: 'חדירת כלי טיס עוין',  state: 'purple' },
+    { term: 'חדירת מחבלים',        state: 'brown' },
+    // New scenarios (community-observed oref titles): hazmat + earthquake.
+    // Substring match also covers "אירוע חומרים מסוכנים" and combined forms.
+    { term: 'חומרים מסוכנים',        state: 'hazmat' },
+    { term: 'רעידת אדמה',            state: 'earthquake' }
+  ];
+
+  // Generic shelter commands — they specify no threat type.
+  var INHERIT_TERMS = [
+    'היכנסו מייד למרחב המוגן',
+    'היכנסו למרחב המוגן',
+    'בזמן ההתגוננות העומד לרשותכם'
+  ];
+
+  var YELLOW_TERMS = [
+    'בדקות הקרובות',
+    'לשפר את המיקום למיגון המיטבי',
+    'לשהות בסמיכות למרחב המוגן',
+    'להישאר בקרבתו',           // "ניתן לצאת ... אך יש להישאר בקרבתו"
+    'התקרבו למרחב מוגן',        // also "איום מלבנון - התקרבו למרחב מוגן"
+    'איום מלבנון',
+    'איום מאיראן',
+    'התרעה מוקדמת',
+    'התראה מוקדמת'
+  ];
+
+  var _warnedUnknownTitles = {};
+
+  function titleIncludesAny(title, terms) {
+    for (var i = 0; i < terms.length; i++) {
+      if (title.indexOf(terms[i]) !== -1) return true;
+    }
+    return false;
+  }
+
+  // An explicit threat name ('ירי רקטות וטילים', 'חדירת כלי טיס עוין'...) in
+  // free text (e.g. an alert `desc`), or null when there is none. Used to
+  // rescue a GENERIC shelter command whose only threat info sits in the desc.
+  function explicitThreatIn(text) {
+    if (!text) return null;
+    for (var i = 0; i < THREAT_TERMS.length; i++) {
+      if (text.indexOf(THREAT_TERMS[i].term) !== -1) return THREAT_TERMS[i].state;
+    }
+    return null;
+  }
+
+  function classifyTitle(title) {
+    var originalTitle = title || "";
+    title = originalTitle.replace(/\s+/g, ' ').trim();
+    if (!title) return 'inherit';
+
+    // 1. ALL CLEAR — checked first so "<threat> - האירוע הסתיים" stays green.
+    if (titleIncludesAny(title, GREEN_TERMS)) return 'green';
+    // "ניתן לצאת" is an all-clear only when unqualified. "ניתן לצאת מהמרחב
+    // המוגן אך יש להישאר בקרבתו" means stay near the shelter → yellow.
+    if (title.indexOf('ניתן לצאת') !== -1 && title.indexOf('להישאר בקרבתו') === -1) {
+      return 'green';
+    }
+
+    // 2. EXPLICIT THREAT TYPE
+    for (var i = 0; i < THREAT_TERMS.length; i++) {
+      if (title.indexOf(THREAT_TERMS[i].term) !== -1) return THREAT_TERMS[i].state;
+    }
+
+    // 3. PRE-ALERT / PREPAREDNESS — must beat generic shelter commands.
+    // Oref's pre-alert (בדקות הקרובות...) carries a generic shelter desc like
+    // "היכנסו למרחב המוגן"; if INHERIT ran first, that desc would resolve to
+    // red and the pre-alert would never show yellow.
+    if (titleIncludesAny(title, YELLOW_TERMS)) return 'yellow';
+
+    // 4. GENERIC SHELTER COMMAND — preserve whatever threat is already active.
+    if (titleIncludesAny(title, INHERIT_TERMS)) return 'inherit';
+
+    // 5. UNKNOWN — default to the most severe interpretation, and say so once.
+    if (!_warnedUnknownTitles[title]) {
+      _warnedUnknownTitles[title] = true;
+      console.warn('Unknown alert title, defaulting to red:', title);
+    }
+    return 'red';
+  }
+
+  // Resolve 'inherit' against a location's current state. A generic shelter
+  // command keeps an active red/purple/brown; with nothing active it means red.
+  function resolveInheritedState(state, name) {
+    if (state !== 'inherit') return state;
+    var existing = locationStates[name];
+    if (existing && (existing.state === 'red' || existing.state === 'purple' || existing.state === 'brown' || existing.state === 'hazmat' || existing.state === 'earthquake')) {
+      return existing.state;
+    }
+    return 'red';
+  }
+
+
+function loadCachedAlerts() {
+    try {
+        var cache = JSON.parse(localStorage.getItem('oref-active-alerts') || '{}');
+        var now = Date.now();
+        var loaded = 0;
+        
+        for (var name in cache) {
+            var entry = cache[name];
+            // Current format stores the threat set; accept the legacy
+            // single-state shape too so an older cache still loads.
+            var threatMap = entry.threats || (entry.state ? (function(){ var m = {}; m[entry.state] = entry.since; return m; })() : null);
+            if (!threatMap) { delete cache[name]; continue; }
+
+            var kept = {};
+            for (var st in threatMap) {
+                var since = threatMap[st];
+                var age = now - since;
+                if (st === 'hazmat' || st === 'earthquake') {
+                    // Prolonged events: restore regardless of age; past the
+                    // default window they render dimmed (stale cue) until an
+                    // official end title removes them.
+                    kept[st] = since;
+                } else {
+                    // SMART EXPIRATION (unchanged): Drones/Terrorists stay for
+                    // 6 hours waiting for Hazlash. Rockets clear after 30 mins.
+                    var maxAge = (st === 'purple' || st === 'brown') ? 6 * 3600000 : 30 * 60000;
+                    if (age <= maxAge) kept[st] = since;
+                }
+            }
+            var keptStates = Object.keys(kept);
+            if (keptStates.length === 0) { delete cache[name]; continue; }
+
+            // Inject back into live memory
+            locationThreats[name] = kept;
+            var top = topThreats(name)[0];
+            locationStates[name] = { state: top, since: kept[top] };
+            var topStale = (top === 'hazmat' || top === 'earthquake') && (now - kept[top] > 30 * 60000);
+            applyFeatureStyle(name, top, topStale ? 0.15 : 0.35, secondThreatOf(name, top));
+            loaded++;
+        }
+        localStorage.setItem('oref-active-alerts', JSON.stringify(cache)); // Save cleaned cache
+        
+        if (loaded > 0) {
+            updateLiveStatus();
+            console.log("🧠 Restored " + loaded + " active alerts from memory.");
+        }
+    } catch(e) {}
+}
+
+  // --- Marker management (feature-state) ---
+// Re-apply the current live style for one location: fill color from its
+// state, border from the second active threat, green fade, and the dimmed
+// stale cue for prolonged hazmat/earthquake events past the default window.
+function liveRestyle(name) {
+    var entry = locationStates[name];
+    if (!entry) return;
+    var now = Date.now();
+    var opacity;
+    if (entry.state === 'green') {
+        opacity = 0.5 * Math.max(0, 1 - ((now - entry.since) / GREEN_FADE_MS));
+    } else if ((entry.state === 'hazmat' || entry.state === 'earthquake') && now - entry.since > 30 * 60000) {
+        opacity = 0.15;
+    } else {
+        opacity = 0.3;
+    }
+    applyFeatureStyle(name, entry.state, opacity, entry.state === 'green' ? entry.state : secondThreatOf(name, entry.state));
+}
+
+function applyFeatureStyle(name, state, opacity, lineState) {
+    var id = nameToId[name];
+    if (id === undefined) return;
+    map.setFeatureState({ source: 'alerts-source', id: id }, {
+      fillColor: COLORS[state],
+      fillOpacity: opacity,
+      lineColor: COLORS[lineState || state],
+      // 🚨 Boost the line opacity to 0.9 so the neon stays bright even when the inner fill fades!
+      lineOpacity: state === 'green' ? opacity : 0.9
+    });
+  }
+    
+    function resetFeatureStyle(name) {
+    var id = nameToId[name];
+    if (id === undefined) return;
+    map.removeFeatureState({ source: 'alerts-source', id: id });
+  }
+  
+  function updateOverlay() {
+    // Only menu blocks map interaction; unified panel keeps map interactive
+    document.body.classList.toggle('has-overlay', menuOpen);
+  }
+
+  function recordHistory(name, title, alertDate, state) {
+    if (!locationHistory[name]) locationHistory[name] = [];
+    var ts = parseAlertDate(alertDate);
+    if (ts && Date.now() - ts > 12 * 60 * 60 * 1000) return;
+    
+    var arr = locationHistory[name];
+    for (var i = 0; i < arr.length; i++) {
+      if (arr[i].title === title) {
+        var existingTs = parseAlertDate(arr[i].alertDate);
+        if (ts && existingTs && Math.abs(ts - existingTs) <= 60000) return;
+        if (!ts && !existingTs) return;
+      }
+    }
+    
+    // 🚨 1. EARLY WARNING TRACKER
+    var warningDelta = null;
+    
+    // If this is a pre-alert (yellow), memorize it!
+    if (state === 'yellow') {
+        preAlertMemory[name] = { ts: ts || Date.now(), type: title };
+    } 
+    // If this is a real attack (red/purple/brown), check if we had a warning!
+    else if ((state === 'red' || state === 'purple') && preAlertMemory[name]) {
+        var preAlert = preAlertMemory[name];
+        var attackTs = ts || Date.now();
+        var deltaMs = attackTs - preAlert.ts;
+        
+        // If the warning happened within the last 15 minutes, it's valid
+        if (deltaMs > 0 && deltaMs < 15 * 60000) {
+            warningDelta = Math.floor(deltaMs / 1000); // Convert to seconds
+            console.log("⏱️ Warning Delta for " + name + ": " + warningDelta + " seconds");
+            
+            // Push to global leaderboard array (we will define this later)
+         if (typeof updateLeaderboard === 'function') {
+                updateLeaderboard(name, warningDelta, preAlert.type, attackTs); // 🚨 PASSED ATTACK TIME
+            }
+        }
+        // Clear the memory so it doesn't get re-used for a later barrage
+        delete preAlertMemory[name]; 
+    }
+
+    arr.push({ title: title, alertDate: alertDate, state: state, warningDelta: warningDelta });
+
+    if (selectedLocation === name) {
+      _scrollSyncLock = true;
+       buildLocationEventList(name);
+      renderEventList();
+      if (!isLiveMode && currentViewTime) syncScrollToTime(currentViewTime);
+      requestAnimationFrame(function() { _scrollSyncLock = false; });
+    }
+  }
+
+  var TITLE_LABELS = {
+    'ירי רקטות וטילים - האירוע הסתיים': 'רקטות וטילים - הסתיים',
+    'חדירת כלי טיס עוין - האירוע הסתיים': 'כטב״מ - האירוע הסתיים',
+    'הסתיים אירוע חדירת מחבלים - ניתן לצאת מהבתים': 'חדירת מחבלים - הסתיים',
+    'אירוע חדירת מחבלים הסתיים': 'חדירת מחבלים - הסתיים',
+    'חדירת מחבלים - החשש הוסר': 'חדירת מחבלים - הסתיים',
+    'ירי רקטות וטילים - היכנסו למרחב המוגן': 'אזעקת רקטות וטילים',
+    'ירי רקטות וטילים': 'אזעקת רקטות וטילים',
+    'חדירת כלי טיס עוין': 'חדירת כטב״מ',
+    'נשק לא קונבנציונלי': 'נשק לא קונבנציונלי',
+    'חדירת מחבלים': 'חדירת מחבלים',
+    'חדירת מחבלים - אין לצאת מהמרחב המוגן': 'חדירת מחבלים - אין לצאת',
+    'בדקות הקרובות צפויות להתקבל התרעות באזורך': 'התרעה מוקדמת',
+    'היכנסו מייד למרחב המוגן': 'היכנסו מייד למרחב המוגן',
+    'היכנסו למרחב המוגן': 'היכנסו למרחב המוגן',
+    'בזמן ההתגוננות העומד לרשותכם': 'היכנסו למרחב מוגן',
+    'על תושבי האזורים הבאים לשפר את המיקום למיגון המיטבי בקרבתך. במקרה של קבלת התרעה, יש להיכנס למרחב המוגן ולשהות בו עד להודעה חדשה.': 'שיפור מיקום למיגון מיטבי',
+    'יש לשהות בסמיכות למרחב המוגן': 'שהייה בסמיכות למרחב המוגן',
+    'איום מלבנון - התקרבו למרחב מוגן': 'איום מלבנון - התקרבו למרחב מוגן',
+    'התקרבו למרחב מוגן': 'התקרבו למרחב מוגן',
+    'ניתן לצאת מהמרחב המוגן': 'ניתן לצאת מהמרחב המוגן',
+    'ניתן לצאת מהמרחב המוגן אך יש להישאר בקרבתו': 'ניתן לצאת מהמרחב המוגן',
+    'השוהים במרחב המוגן יכולים לצאת': 'ניתן לצאת מהמרחב המוגן',
+    'האירוע הסתיים': 'האירוע הסתיים',
+    'עדכון': 'ניתן לצאת מהמרחב המוגן',
+  };
+   
+  function displayLabel(title) {
+    var norm = (title || '').replace(/\s+/g, ' ').trim();
+    // Hazmat/earthquake: the row's color + legend carry the category; the text
+    // stays the verbatim official message (never collapsed to a short label).
+    if (norm.indexOf('חומרים מסוכנים') !== -1 || norm.indexOf('רעידת אדמה') !== -1) return norm;
+    if (TITLE_LABELS[norm]) return TITLE_LABELS[norm];
+    var keys = Object.keys(TITLE_LABELS);
+    for (var i = 0; i < keys.length; i++) {
+      if (norm.includes(keys[i])) return TITLE_LABELS[keys[i]];
+    }
+    return '\u26A0 ' + norm;
+  }
+
+  // --- Polygon highlight for selected location ---
+  var _panelHighlightName = null;
+  var _panelHighlightSaved = null;
+  var _panelLabelPopup = null;
+
+// --- TTA PREFERENCE & TOGGLE ---
+  var showTTA = true;
+  try { if (localStorage.getItem('oref-show-tta') === 'false') showTTA = false; } catch(e) {}
+
+  function toggleTTA() {
+      var cb = document.getElementById('tta-toggle-cb');
+      showTTA = cb ? cb.checked : true;
+      try { localStorage.setItem('oref-show-tta', showTTA); } catch(e) {}
+
+      if (!showTTA) {
+          // If turned off: instantly destroy all active markers on the map
+          for (var key in ttaMarkers) {
+              ttaMarkers[key].remove();
+              delete ttaMarkers[key];
+          }
+      } else {
+          // If turned on: scan current active alerts and redraw the necessary numbers
+          for (var locName in locationStates) {
+              var s = locationStates[locName].state;
+              if (s === 'red' || s === 'purple') {
+                  addTTAMarker(locName);
+              }
+          }
+      }
+  }
+
+  // Sync the checkbox UI with saved memory when the page boots up
+  document.addEventListener('DOMContentLoaded', function() {
+      var cb = document.getElementById('tta-toggle-cb');
+      if (cb) cb.checked = showTTA;
+  });
+
+// --- TIME TO SHELTER (TTA) LOGIC ---
+  function getTTA(name) {
+      if (Object.keys(timeToShelterData).length === 0) return "דקה וחצי"; // Safety check
+
+      // 🚨 HEBREW NORMALIZER: Strips punctuation and normalizes double Yods (קריית -> קרית)
+      var clean = function(s) { 
+          return s.replace(/[-\s,"'׳״()]/g, '')
+                  .replace(/קריית/g, 'קרית')
+                  .replace(/יי/g, 'י'); 
+      };
+      
+      var superOref = clean(name);
+      
+      // 1. Clean Exact Match
+      for (var key in timeToShelterData) {
+          if (clean(key) === superOref) return timeToShelterData[key];
+      }
+
+      // 2. Base City Match (Splits things like "שדרות, איבים" -> "שדרות")
+      var baseName = clean(name.split(/[-,\/]/)[0]); 
+      
+      if (baseName.length >= 2) {
+          for (var key in timeToShelterData) {
+              var superKey = clean(key);
+              // Matches if the base city is identical (e.g., Tel Aviv Center -> Tel Aviv Yafo)
+              if (superKey === baseName || superKey.startsWith(baseName) || superOref.startsWith(superKey)) {
+                  return timeToShelterData[key];
+              }
+          }
+      }
+
+      // 3. Absolute Fallback
+      return "דקה וחצי"; 
+  }
+   
+function addTTAMarker(name) {
+      if (!showTTA) return;
+      if (ttaMarkers[name]) return; 
+      
+      var center = _polygonCentroid(name);
+      if (!center) return; 
+
+      var timeStr = getTTA(name);
+      
+      // 🚨 THE FIX: If the dictionary returned a raw number (like 15 or 30), append " שניות"
+      if (/^\d+$/.test(String(timeStr))) {
+          timeStr += ' שניות';
+      }
+      
+      var container = document.createElement('div');
+      container.className = 'tta-wrapper';
+      
+      var inner = document.createElement('div');
+      inner.className = 'tta-marker';
+      inner.innerHTML = timeStr; 
+      
+      container.appendChild(inner);
+
+      ttaMarkers[name] = new maplibregl.Marker({ element: container, anchor: 'center' })
+          .setLngLat(center)
+          .addTo(map);
+  }
+   
+  function removeTTAMarker(name) {
+      if (ttaMarkers[name]) {
+          ttaMarkers[name].remove();
+          delete ttaMarkers[name];
+      }
+  }
+
+// --- POLYGON HIGHLIGHTING SYSTEM ---
+  var _panelHighlightName = null;
+  var _panelHighlightSaved = null;
+  var _panelLabelPopup = null;
+
+   function _applyPanelHighlight(name) {
+    if (_panelLabelPopup) { _panelLabelPopup.remove(); _panelLabelPopup = null; }
+    var id = nameToId[name];
+    if (id === undefined) return;
+    
+    _panelHighlightName = name;
+    _panelHighlightSaved = map.getFeatureState({ source: 'alerts-source', id: id }) || {};
+    
+    map.setFeatureState({ source: 'alerts-source', id: id }, {
+        fillColor: _panelHighlightSaved.fillColor || '#888888',
+        fillOpacity: Math.max((_panelHighlightSaved.fillOpacity || 0.01), 0.35),
+        lineColor: '#3b82f6',
+        lineOpacity: 1,
+        lineWidth: 3
+    });
+    
+    var center = _polygonCentroid(name);
+    if (center) {
+        _panelLabelPopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, className: 'selected-label', offset: [0, -4] })
+            .setLngLat(center)
+            .setDOMContent((function() { var b = document.createElement('b'); b.textContent = name; return b; })())
+            .addTo(map);
+    }
+}
+
+function _polygonCentroid(name) {
+    var feature = featureMap[name];
+    if (!feature) return null;
+    
+    var bounds = new maplibregl.LngLatBounds();
+    
+    // 🚨 THE FIX: Recursively extract points so it works for ANY shape complexity
+    function addPoints(arr) {
+        if (arr.length === 2 && typeof arr[0] === 'number') {
+            bounds.extend(arr);
+        } else {
+            for (var i = 0; i < arr.length; i++) addPoints(arr[i]);
+        }
+    }
+    
+    addPoints(feature.geometry.coordinates);
+    var center = bounds.getCenter();
+    return [center.lng, center.lat];
+}
+
+function _removePanelHighlight() {
+    if (_panelLabelPopup) { _panelLabelPopup.remove(); _panelLabelPopup = null; }
+    if (!_panelHighlightName) return;
+    var name = _panelHighlightName;
+    var entry = locationStates[name];
+    if (entry) {
+        liveRestyle(name);
+    } else {
+        resetFeatureStyle(name);
+    }
+    _panelHighlightName = null;
+    _panelHighlightSaved = null;
+}
+   // --- Unified panel: event list ---
+  var _locationEventList = []; // merged events for selected location
+
+  function buildLocationEventList(name) {
+    var extEntries = [];
+    var latestExtTs = 0;
+    var bounds = viewingDayBounds();
+    for (var i = 0; i < extendedHistory.length; i++) {
+      var e = extendedHistory[i];
+      if (e.location === name && e.alertDate >= bounds.start && e.alertDate <= bounds.end) {
+        extEntries.push({ title: e.title, alertDate: e.alertDate, state: e.state });
+        if (e.alertDate > latestExtTs) latestExtTs = e.alertDate;
+      }
+    }
+    // Supplement with recent locationHistory entries (fills R2 lag)
+    var locEntries = locationHistory[name] || [];
+    for (var j = 0; j < locEntries.length; j++) {
+      var le = locEntries[j];
+      var leTs = parseAlertDate(le.alertDate);
+      if (leTs && leTs > latestExtTs) {
+        extEntries.push({ title: le.title, alertDate: leTs, state: le.state });
+      }
+    }
+    extEntries.sort(function(a, b) { return a.alertDate - b.alertDate; });
+    // Dedup same title within 1 minute
+    _locationEventList = [];
+    for (var k = 0; k < extEntries.length; k++) {
+      var entry = extEntries[k];
+      var dominated = false;
+      for (var m = _locationEventList.length - 1; m >= 0; m--) {
+        if (_locationEventList[m].title === entry.title &&
+            Math.abs(_locationEventList[m].alertDate - entry.alertDate) <= 60000) {
+          dominated = true; break;
+        }
+      }
+      if (!dominated) _locationEventList.push(entry);
+    }
+  }
+
+  function renderEventList() {
+    var listEl = document.getElementById('up-event-list');
+    listEl.innerHTML = '';
+    if (_locationEventList.length === 0) {
+      var emptyEl = document.createElement('div');
+      emptyEl.className = 'up-empty';
+      emptyEl.textContent = 'אין אירועים';
+      listEl.appendChild(emptyEl);
+      return;
+    }
+    for (var i = 0; i < _locationEventList.length; i++) {
+      var e = _locationEventList[i];
+      var color = COLORS[e.state] || '#888';
+      var label = displayLabel(e.title);
+      var d = new Date(e.alertDate);
+      var timeStr = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+      // Group separator: if next entry is non-green and this entry is green
+      var nextE = _locationEventList[i + 1];
+      var sepClass = (nextE && e.state === 'green' && nextE.state !== 'green') ? ' up-event-sep' : '';
+      var row = document.createElement('div');
+      row.className = 'up-event-row' + sepClass;
+      row.dataset.ts = e.alertDate;
+      row.dataset.idx = String(i);
+      var timeSpan = document.createElement('span');
+      timeSpan.className = 'up-event-time';
+      timeSpan.style.color = color;
+      timeSpan.textContent = timeStr;
+      var labelSpan = document.createElement('span');
+      labelSpan.className = 'up-event-label';
+      labelSpan.textContent = label;
+      row.appendChild(timeSpan);
+      row.appendChild(labelSpan);
+      listEl.appendChild(row);
+    }
+  }
+
+  function updateFavStar(name) {
+    var isFav = !!favorites[name];
+    var starEl = document.getElementById('up-fav-star');
+    starEl.textContent = isFav ? '\u2605' : '\u2606';
+    starEl.style.color = isFav ? '#f5a623' : '#ccc';
+    starEl.title = isFav ? '\u05D4\u05E1\u05E8 \u05DE\u05DE\u05D5\u05E2\u05D3\u05E4\u05D9\u05DD' : '\u05D4\u05D5\u05E1\u05E3 \u05DC\u05DE\u05D5\u05E2\u05D3\u05E4\u05D9\u05DD';
+  }
+
+  function syncScrollToTime(time) {
+    if (!selectedLocation) return;
+    var wasLocked = _scrollSyncLock;
+    _scrollSyncLock = true;
+    var listEl = document.getElementById('up-event-list');
+    var rows = listEl.querySelectorAll('.up-event-row');
+    var targetIdx = -1;
+    for (var i = rows.length - 1; i >= 0; i--) {
+      var ts = Number(rows[i].getAttribute('data-ts'));
+      if (ts <= time) { targetIdx = i; break; }
+    }
+    // Update current marker
+    for (var j = 0; j < rows.length; j++) {
+      rows[j].classList.toggle('up-current', j === targetIdx);
+    }
+    _currentEventIdx = targetIdx;
+    // Scroll to ~75% from top
+    if (targetIdx >= 0 && rows[targetIdx]) {
+      var listHeight = listEl.clientHeight;
+      var targetOffset = rows[targetIdx].offsetTop;
+      var scrollTarget = targetOffset - listHeight * 0.75;
+      listEl.scrollTop = Math.max(0, scrollTarget);
+    }
+    // Only schedule unlock if we acquired the lock (caller may hold it)
+    if (!wasLocked) {
+      requestAnimationFrame(function() { _scrollSyncLock = false; });
+    }
+  }
+
+  // --- Unified panel: open/close ---
+  function openSlimPanel() {
+    if (menuOpen) closeMenu();
+    var panel = document.getElementById('unified-panel');
+    panel.classList.remove('full');
+    panel.classList.add('slim');
+    unifiedPanelState = 'slim';
+    document.body.classList.add('panel-open');
+    pushPanelHistory();
+  }
+
+function openFullPanel(name) {
+   console.log("DEBUG: Entered openFullPanel for:", name);
+    
+    var panel = document.getElementById('unified-panel');
+    var nameEl = document.getElementById('up-location-name');
+    var popEl = document.getElementById('up-location-pop');
+    
+    if (!panel) console.error("CRITICAL: #unified-panel not found!");
+    if (!nameEl) console.error("CRITICAL: #up-location-name not found!");
+    
+    _removePanelHighlight();
+    panel.classList.add('city-view-active');
+    if (unifiedPanelState === 'closed') {
+      openTimelineFn({ noSeek: true }); 
+    }
+    
+    panel.classList.remove('slim');
+    panel.classList.add('full');
+    unifiedPanelState = 'full';
+    selectedLocation = name;    // Populate header
+    document.getElementById('up-location-name').textContent = name;
+    var popEl = document.getElementById('up-location-pop');
+    var pop = locationPopulations ? locationPopulations[name] : 0;
+    popEl.innerHTML = pop ? makePopIcon() + pop.toLocaleString('he-IL') : '';
+    updateFavStar(name);
+    // Build and render event list (lock scroll sync to prevent scroll events
+    // from renderEventList() triggering a seekTo that changes the viewed time)
+    _scrollSyncLock = true;
+    buildLocationEventList(name);
+    renderEventList();
+    _applyPanelHighlight(name);
+        // If in history mode, sync scroll to current time. If live, scroll to the newest alert!
+    if (!isLiveMode && currentViewTime) {
+      syncScrollToTime(currentViewTime);
+    } else if (isLiveMode) {
+      syncScrollToTime(Date.now());
+    }
+    // Hold lock until after desktop height transition completes (~250ms CSS),
+    // then release on next rAF to cover any final scroll events
+    if (window.innerWidth >= 600) {
+      panel.addEventListener('transitionend', function handler(e) {
+        if (e.propertyName !== 'height') return;
+        panel.removeEventListener('transitionend', handler);
+        requestAnimationFrame(function() { _scrollSyncLock = false; });
+      });
+      // Fallback: release after 350ms if transitionend doesn't fire (e.g. no transition)
+      setTimeout(function() { _scrollSyncLock = false; }, 350);
+    } else {
+      requestAnimationFrame(function() { _scrollSyncLock = false; });
+    }
+
+    // Clicking a polygon opens the panel without moving the map, so a city near
+    // the right edge ends up behind the panel. Pan it clear — pan only, never
+    // zoom: during an alert the user must not lose their frame of reference.
+    requestAnimationFrame(function() { nudgeIntoView(name); });
+  }
+
+  function nudgeIntoView(name) {
+    // The search path fits bounds with panel-aware padding; nudging as well
+    // would fight that animation.
+    if (isZoomingProgrammatically) return;
+    if (!map || !featureMap || !featureMap[name]) return;
+
+    var panel = document.getElementById('unified-panel');
+    if (!panel) return;
+    if (!panel.classList.contains('slim') && !panel.classList.contains('full')) return;
+    var pr = panel.getBoundingClientRect();
+    if (!pr.width || !pr.height) return;
+
+    var bounds;
+    try { bounds = featureBounds(featureMap[name]); } catch (e) { return; }
+    if (!bounds) return;
+
+    var pt;
+    try { pt = map.project(bounds.getCenter()); } catch (e) { return; }
+    if (!pt) return;
+
+    var GAP = 40;              // keep the polygon this clear of the panel edge
+    var dx = 0, dy = 0;
+    var isDesktop = window.matchMedia('(min-width: 601px)').matches;
+
+    // Only nudge when the target genuinely sits behind the card. Testing one
+    // edge was fine while the panel spanned the viewport, but it is now a short
+    // content-height card, so an x-only test would pan cities that are already
+    // in open map well below it.
+    var occluded = pt.x > pr.left - GAP && pt.x < pr.right + GAP &&
+                   pt.y > pr.top  - GAP && pt.y < pr.bottom + GAP;
+    if (!occluded) return;
+
+    if (isDesktop) {
+      dx = pt.x - (pr.left / 2);
+    } else {
+      dy = pt.y - (pr.top / 2);
+    }
+if (!dx && !dy) return;    // already in open map — leave the camera alone
+
+    map.panBy([dx, dy], { 
+      duration: 750, // Stretched from 420ms for a softer glide
+      easing: function(t) { return t * (2 - t); }, // Smooth ease-out curve
+      essential: true 
+    });
+  }
+
+function deselectLocation() {
+    _removePanelHighlight();
+    selectedLocation = null;
+    _locationEventList = [];
+    _currentEventIdx = -1;
+    document.getElementById('up-event-list').innerHTML = '';
+    var panel = document.getElementById('unified-panel');
+    
+    // 🚨 If it was opened from an empty map, close it completely!
+    if (locationOpenedFromClosed) {
+        closeUnifiedPanel(); 
+        locationOpenedFromClosed = false; // Reset the flag
+        
+    } else if (unifiedPanelState === 'full') {
+        // Otherwise, smoothly drop them back to the timeline mode
+        panel.style.transition = 'none';
+        panel.classList.remove('full', 'city-view-active'); // 🚨 Added city-view-active cleanup
+        panel.classList.add('slim');
+        panel.offsetHeight; // force reflow with no transition
+        panel.style.transition = '';
+        unifiedPanelState = 'slim';
+    }
+}
+
+function closeUnifiedPanel() {
+    var panel = document.getElementById('unified-panel');
+    
+    panel.classList.remove('slim', 'full', 'city-view-active'); 
+    
+    unifiedPanelState = 'closed';
+    document.body.classList.remove('panel-open');
+
+    document.body.classList.remove('has-overlay');
+   
+    _removePanelHighlight();
+    selectedLocation = null;
+    _locationEventList = [];
+    _currentEventIdx = -1;
+    document.getElementById('up-event-list').innerHTML = '';
+  }
+   
+  // Wrappers that existing code calls
+
+function openLocationPanel(name) {
+    console.log("DEBUG: openLocationPanel called for:", name);
+    try {
+        _removePanelHighlight();
+        
+        // If the panel is closed, track that so we know to close it completely later
+        if (unifiedPanelState === 'closed') {
+            console.log("DEBUG: Panel was closed, opening slim version...");
+            locationOpenedFromClosed = true; // 🚨 Flag that it was opened from scratch
+            
+            var panel = document.getElementById('unified-panel');
+            panel.classList.add('slim');
+            unifiedPanelState = 'slim';
+            document.body.classList.add('panel-open');
+            
+        } else if (unifiedPanelState === 'slim') {
+            // It was already open (e.g. from the timeline button)
+            locationOpenedFromClosed = false; 
+        }
+
+        // Now switch to the full City view
+        console.log("DEBUG: Switching to full panel...");
+        openFullPanel(name);
+        
+    } catch (err) {
+        console.error("CRITICAL ERROR in openLocationPanel:", err);
+    }
+}
+
+  function closeLocationPanel() {
+    if (selectedLocation) deselectLocation();
+  }
+
+
+  // Expose for panel onclick — uses selectedLocation so no name is embedded in HTML
+  window._toggleFav = function(e) {
+    if (e) e.stopPropagation();
+    var name = selectedLocation;
+    if (!name) return;
+    var latlng = favorites[name];
+    if (!latlng) {
+      // Compute centroid from feature
+      var feature = featureMap[name];
+      if (feature) {
+        var outer = feature.geometry.coordinates[0];
+        var sumLat = 0, sumLng = 0;
+        for (var i = 0; i < outer.length; i++) { sumLng += outer[i][0]; sumLat += outer[i][1]; }
+        latlng = { lat: sumLat / outer.length, lng: sumLng / outer.length };
+      }
+    }
+    if (!latlng) return;
+    toggleFavorite(name, latlng);
+  };
+
+  // --- Favorites ---
+  function saveFavorites() {
+    try { localStorage.setItem('oref-favorites', JSON.stringify(favorites)); } catch(e) {}
+  }
+
+  function makeFavoriteMarkerEl() {
+    var el = document.createElement('span');
+    el.style.cssText = 'display:flex;width:14px;height:14px;background:#fff;border-radius:50%;box-shadow:0 0 6px rgba(0,0,0,0.3);align-items:center;justify-content:center';
+    el.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="#f5a623" stroke="#c88a1a" stroke-width="1"><polygon points="12,2 15.09,8.26 22,9.27 17,14.14 18.18,21.02 12,17.77 5.82,21.02 7,14.14 2,9.27 8.91,8.26"/></svg>';
+    return el;
+  }
+
+  function addFavoriteMarker(name, latlng) {
+    if (favoriteMarkers[name]) favoriteMarkers[name].remove();
+    favoriteMarkers[name] = new maplibregl.Marker({ element: makeFavoriteMarkerEl(), anchor: 'center' })
+      .setLngLat([latlng.lng, latlng.lat])
+      .addTo(map);
+  }
+
+  function removeFavoriteMarker(name) {
+    if (favoriteMarkers[name]) {
+      favoriteMarkers[name].remove();
+      delete favoriteMarkers[name];
+    }
+  }
+
+  function toggleFavorite(name, latlng) {
+    if (favorites[name]) {
+      delete favorites[name];
+      removeFavoriteMarker(name);
+    } else {
+      favorites[name] = { lat: latlng.lat, lng: latlng.lng };
+      addFavoriteMarker(name, latlng);
+    }
+    saveFavorites();
+    // Refresh fav star if panel open for this location
+    if (selectedLocation === name) {
+      updateFavStar(name);
+    }
+  }
+
+  // --- Polygon pulse hint (mobile) ---
+  function showPolygonHint() {
+    // Collect all currently colored polygons and those with recent history
+    var targets = []; // [{name, color, savedState}]
+
+    for (var name in locationStates) {
+      var entry = locationStates[name];
+      if (nameToId[name] === undefined) continue;
+      var saved = map.getFeatureState({ source: 'alerts-source', id: nameToId[name] }) || {};
+      targets.push({ name: name, color: COLORS[entry.state], savedState: saved });
+    }
+
+    // Also include recently-faded polygons with history but no active state
+    if (targets.length === 0) {
+      for (var hName in locationHistory) {
+        if (locationHistory[hName].length > 0 && !locationStates[hName] && nameToId[hName] !== undefined) {
+          var hSaved = map.getFeatureState({ source: 'alerts-source', id: nameToId[hName] }) || {};
+          targets.push({ name: hName, color: COLORS.green, savedState: hSaved });
+        }
+      }
+    }
+
+    if (targets.length === 0) return;
+
+    var step = 0, totalSteps = 30; // 3 cycles * 10 steps per cycle
+    polygonHintTargets = targets;
+    polygonHintInterval = setInterval(function() {
+      var t = (step % 10) / 10;
+      var opacity = 0.05 + 0.15 * Math.sin(t * Math.PI);
+      for (var i = 0; i < targets.length; i++) {
+        var id = nameToId[targets[i].name];
+        if (id === undefined) continue;
+        map.setFeatureState({ source: 'alerts-source', id: id }, {
+          fillColor: targets[i].color, fillOpacity: opacity,
+          lineColor: targets[i].color, lineOpacity: Math.min(opacity + 0.15, 0.8), lineWidth: 2
+        });
+      }
+      step++;
+      if (step >= totalSteps) {
+        clearInterval(polygonHintInterval);
+        polygonHintInterval = null;
+        for (var j = 0; j < targets.length; j++) {
+          var rid = nameToId[targets[j].name];
+          if (rid === undefined) continue;
+          if (Object.keys(targets[j].savedState).length > 0) {
+            map.setFeatureState({ source: 'alerts-source', id: rid }, targets[j].savedState);
+          } else {
+            map.removeFeatureState({ source: 'alerts-source', id: rid });
+          }
+        }
+        polygonHintTargets = null;
+      }
+    }, 100);
+  }
+
+  function cancelPolygonHint() {
+    if (polygonHintInterval) {
+      clearInterval(polygonHintInterval);
+      polygonHintInterval = null;
+    }
+    if (polygonHintTargets) {
+      for (var i = 0; i < polygonHintTargets.length; i++) {
+        var id = nameToId[polygonHintTargets[i].name];
+        if (id === undefined) continue;
+        var saved = polygonHintTargets[i].savedState;
+        if (saved && Object.keys(saved).length > 0) {
+          map.setFeatureState({ source: 'alerts-source', id: id }, saved);
+        } else {
+          map.removeFeatureState({ source: 'alerts-source', id: id });
+        }
+      }
+      polygonHintTargets = null;
+    }
+  }
+
+/**
+ * Resolves an Oref location string to the polygon key(s) it designates.
+ *
+ * Returns an ARRAY, because one Oref name legitimately maps to several
+ * polygons: a city-wide alert for "ירושלים" covers all seven Jerusalem zones,
+ * and there is no whole-city polygon to fall back on.
+ *
+ * Resolution order, strictest first. Every step is exact against an index --
+ * there is deliberately no similarity or substring scoring. The previous
+ * implementation's superKey.includes(superOref) and startsWith fallbacks
+ * silently lit the wrong city ("דן" -> "עידן", "אזור לא ידוע" -> "אזור",
+ * "מודיעין" -> "מודיעין עילית"). Lighting the wrong polygon is worse than
+ * lighting none: it hides the real alert and raises a false one.
+ */
+function resolveLocation(orefName, strict) {
+    var folded = foldName(orefName);
+    if (!folded) return [];
+
+    // 1. Exact match after normalization, including cities.json aliases.
+    var hit = nameIndex.exact[folded];
+    if (hit && hit.length === 1) return hit.slice();
+    if (hit && hit.length > 1) {
+        // Genuinely ambiguous fold (only "גת" vs "ג'ת" today). Prefer the
+        // candidate matching the normalized form; otherwise give up rather
+        // than guess.
+        var norm = normalizeName(orefName);
+        for (var i = 0; i < hit.length; i++) {
+            if (normalizeName(hit[i]) === norm) return [hit[i]];
+        }
+        return [];
+    }
+
+    // 2. City-wide name that exists only as subzones -> light every subzone.
+    var fan = nameIndex.base[folded];
+    if (fan && fan.length) return fan.slice();
+
+    // 3. Qualified subzone with no polygon of its own ("עכו - רמות ים" when
+    //    only "עכו" exists) -> fall back to the base city. Split only on a
+    //    real separator, never on an arbitrary prefix.
+    // Skipped in strict mode: it must not pre-empt splitting a multi-location
+    // string. "תל אביב - מרכז העיר, רמת גן - מערב" would otherwise cut at the
+    // first dash and fan out all of Tel Aviv, dropping Ramat Gan entirely.
+    if (strict) return [];
+
+    // 3a. District-wide alert -> light every town in the district.
+    var zoneFan = nameIndex.zone[folded];
+    if (zoneFan && zoneFan.length) return zoneFan.slice();
+
+    var norm2 = normalizeName(orefName);
+    var cut = norm2.search(/[-,]/);
+    if (cut > 0) {
+        var baseFolded = foldName(norm2.slice(0, cut));
+        if (baseFolded && baseFolded !== folded) {
+            var baseHit = nameIndex.exact[baseFolded];
+            if (baseHit && baseHit.length === 1) return baseHit.slice();
+            var baseFan = nameIndex.base[baseFolded];
+            if (baseFan && baseFan.length) return baseFan.slice();
+        }
+    }
+
+    return [];
+}
+
+// Names we could not place. A silent miss is what made this class of bug hard
+// to see; surface it instead. Inspect via window.__unresolvedLocations.
+var unresolvedLocations = {};
+function noteUnresolved(name) {
+    if (!name) return;
+    if (!unresolvedLocations[name]) {
+        unresolvedLocations[name] = 0;
+        console.warn('⚠️ Unresolved Oref location: ' + JSON.stringify(name));
+    }
+    unresolvedLocations[name]++;
+}
+try { window.__unresolvedLocations = unresolvedLocations; } catch (e) {}
+
+/**
+ * Back-compat single-value resolver: returns the input unchanged when nothing
+ * matched, preserving the previous contract. Callers still gate on featureMap.
+ */
+function resolveCityName(orefName) {
+    var out = resolveLocation(orefName);
+    return out.length ? out[0] : orefName;
+}
+
+   // --- LOCATION UNROLLER ---
+// Oref sometimes packs several places into one string ("מבטחים, עמיעוז, ישע").
+// Splitting is only safe AFTER the whole string fails to resolve, because many
+// legitimate polygon names contain the very separators we split on: 21 keys
+// contain a comma and 27 contain " ו". Every split candidate is therefore
+// verified against the index, and a split is accepted only if it explains the
+// whole string.
+function expandAndResolveLocations(rawLocations) {
+    var finalLocations = [];
+
+    function pushAll(list) {
+        for (var i = 0; i < list.length; i++) {
+            if (finalLocations.indexOf(list[i]) === -1) finalLocations.push(list[i]);
+        }
+    }
+
+    // Splits `text` on `sep` and returns the resolved keys only if EVERY
+    // fragment resolves. A partial match means we guessed the separator wrong.
+    function trySplit(text, sep) {
+        var parts = text.split(sep);
+        if (parts.length < 2) return null;
+        var out = [];
+        for (var i = 0; i < parts.length; i++) {
+            var frag = parts[i].trim();
+            if (!frag) continue;
+            var hit = resolveLocation(frag, true);
+            if (!hit.length) return null;
+            out = out.concat(hit);
+        }
+        return out.length ? out : null;
+    }
+
+    (rawLocations || []).forEach(function(raw) {
+        var normalized = normalizeName(raw);
+        if (!normalized) return;
+
+        // 1. Whole string first. This is the common case and must win outright,
+        //    so "מבטחים, עמיעוז, ישע" and "כפר הרי''ף וצומת ראם" resolve to
+        //    their own polygons instead of being torn apart.
+        var direct = resolveLocation(normalized, true);
+        if (direct.length) { pushAll(direct); return; }
+
+        // 2. "אשדוד - יא, יב, טו" -> distribute the base city over the zones.
+        var dash = normalized.lastIndexOf('-');
+        if (dash > 0 && normalized.indexOf(',', dash) > -1) {
+            var baseCity = normalized.slice(0, dash).trim();
+            var zones = normalized.slice(dash + 1).split(',');
+            var expanded = [], ok = true;
+            for (var z = 0; z < zones.length; z++) {
+                var zone = zones[z].trim();
+                if (!zone) continue;
+                var hit = resolveLocation(baseCity + ' - ' + zone, true);
+                if (!hit.length) { ok = false; break; }
+                expanded = expanded.concat(hit);
+            }
+            if (ok && expanded.length) { pushAll(expanded); return; }
+        }
+
+        // 3. Plain comma list, then vav-joined pair. All-or-nothing each.
+        var byComma = trySplit(normalized, ',');
+        if (byComma) { pushAll(byComma); return; }
+
+        var byVav = trySplit(normalized, ' ו');
+        if (byVav) { pushAll(byVav); return; }
+
+        // 4. No split explained the string. Now allow the loose base-city
+        //    fallback, so an unknown subzone ("עכו - רמות ים") still lights its
+        //    parent city instead of nothing.
+        var loose = resolveLocation(normalized, false);
+        if (loose.length) { pushAll(loose); return; }
+
+        // 5. Nothing explained it. Record the miss rather than dropping it
+        //    silently -- see window.__unresolvedLocations.
+        noteUnresolved(normalized);
+    });
+
+    return finalLocations;
+}
+
+   
+// --- Global State for Live Alerts ---
+  var lastLiveAlertPayload = '';
+  window._liveZoomDebounce = null;
+
+  function processLiveAlert(alert) {
+    console.log("🚨 ALERT RECEIVED:", alert);
+    
+    // 1. DATA VALIDATION: Allow alerts without a title (Drones often omit it)
+    if (!alert || !alert.data) {
+        console.error("❌ Alert rejected: Missing data");
+        return;
+    }
+    
+    // 2. DRONE FALLBACK: Rebuild missing titles based on Category (cat)
+    var rawTitle = alert.title || '';
+    if (!rawTitle) {
+        if (String(alert.cat) === "2") {
+            rawTitle = "חדירת כלי טיס עוין";
+        } else if (String(alert.cat) === "3") {
+            rawTitle = "חדירת מחבלים";
+        } else if (alert.desc) {
+            rawTitle = alert.desc.split('-')[0].trim();
+        } else {
+            rawTitle = "התרעת צבע אדום"; // Ultimate Fallback
+        }
+    }
+    
+    // 3. THREAT CLASSIFICATION (Red vs Purple)
+    // Classify the TITLE alone. Concatenating the desc used to let a generic
+    // shelter desc ("היכנסו למרחב המוגן") outrank the pre-alert title and turn
+    // the whole event red (bug report: pre-alerts show red, not yellow). The
+    // desc is consulted only when the title is a generic shelter command and
+    // only for an explicit threat name, e.g. a drone alert whose title is
+    // "היכנסו למרחב המוגן" and whose desc names "חדירת כלי טיס עוין".
+    var cleanTitle = rawTitle.replace(/\s+/g, ' ').trim();
+    var state = classifyTitle(cleanTitle);
+    if (state === 'inherit') {
+      var descThreat = explicitThreatIn(String(alert.desc || ''));
+      if (descThreat) state = descThreat;
+    }
+
+    if (state !== 'green') lastDangerTime = Date.now();
+    
+// 4. ARRAY FIX & UNROLLER
+  // Do NOT pre-split on comma: 21 polygon names legitimately contain one
+  // ("עין חרוד, תל יוסף", "דור, נחשולים"). expandAndResolveLocations() tries the
+  // whole string first and only splits when every fragment resolves.
+  var rawLocations = Array.isArray(alert.data) ? alert.data : [alert.data];
+  var locations = expandAndResolveLocations(rawLocations);
+  
+  // 5. TIME SYNC
+    var d = new Date();
+    d = new Date(d.toLocaleString("en-US", {timeZone: "Asia/Jerusalem"}));
+    var pad = function(n) { return n < 10 ? '0' + n : n; };
+    var now = d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+
+    var droppedCities = [];
+    var processedCount = 0;
+
+    // 6. EXECUTION LOOP
+    for (var i = 0; i < locations.length; i++) {
+      // expandAndResolveLocations() already returned canonical polygon keys.
+      var loc = locations[i];
+
+      if (nameToId[loc] === undefined) {
+          droppedCities.push(loc);
+          noteUnresolved(loc);
+          continue;
+      }
+      
+      // A generic shelter command carries no threat type, so resolve it against
+      // whatever is already active at this location.
+      var locState = resolveInheritedState(state, loc);
+
+      recordHistory(loc, cleanTitle, now, locState);
+
+      // 🚨 THE STICKY HANDOFF: Passes the alert to our new memory function
+      if (isLiveMode) {
+        applyThreatEvent(loc, cleanTitle, locState);
+        processedCount++;
+      } else if (liveLocationStates) {
+        updateShadowState(loc, locState);
+        processedCount++;
+      }
+    }
+    
+    if (droppedCities.length > 0) console.warn("⚠️ Dropped Cities:", droppedCities);
+    if (processedCount > 0) console.log("✅ Processed " + processedCount + " cities.");
+    
+    // 7. BATCH ZOOM: Swoop the camera in 50ms after the barrage hits
+   if (shouldAutoZoomToEvents() && isLiveMode && !selectedLocation && processedCount > 0) {
+      if (window._liveZoomDebounce) clearTimeout(window._liveZoomDebounce);
+      window._liveZoomDebounce = setTimeout(function() { maybeZoomToEvent(); }, 50);
+    }
+    
+    document.dispatchEvent(new CustomEvent('app:stateChanged'));
+  }
+
+  // 🚨 INJECTION HELPERS: Keep these so your Test Buttons work perfectly
+  window.injectAlert = function(mockAlert) {
+    console.log('Injecting mock alert:', mockAlert);
+    processLiveAlert(mockAlert);
+  };
+
+  window.printAlertAllLocations = function() {
+    var active = [];
+    for (var name in locationStates) {
+      if (locationStates[name] && locationStates[name].state !== 'green') {
+        active.push(name);
+      }
+    }
+    active.sort(function(a, b) { return a.localeCompare(b, 'he'); });
+    console.log(JSON.stringify(active));
+    return active;
+  };
+
+  window.printRedAlertLocations = function() {
+    var red = [];
+    for (var name in locationStates) {
+      if (locationStates[name] && locationStates[name].state === 'red') {
+        red.push(name);
+      }
+    }
+    red.sort(function(a, b) { return a.localeCompare(b, 'he'); });
+    console.log(JSON.stringify(red));
+    return red;
+  };
+
+  function formatRelativeTime(ts) {
+    if (!ts) return '';
+    var diffMs = Date.now() - ts;
+    if (diffMs < 0) diffMs = 0;
+    var mins = Math.floor(diffMs / 60000);
+    if (mins < 1) return 'לפני פחות מדקה';
+    if (mins < 60) return 'לפני ' + mins + ' דקות';
+    var hours = Math.floor(mins / 60);
+    if (hours < 24) return 'לפני ' + hours + ' שעות';
+    return '';
+  }
+
+  // Returns a maplibregl.LngLatBounds for the given feature (GeoJSON polygon)
+  function featureBounds(feature) {
+    var bounds = new maplibregl.LngLatBounds();
+    var coords = feature.geometry.coordinates;
+    // outer ring only (index 0)
+    var outer = coords[0];
+    for (var i = 0; i < outer.length; i++) bounds.extend(outer[i]);
+    return bounds;
+  }
+
+  function getActiveEventBounds() {
+    var allBounds = null;
+    for (var name in locationStates) {
+      if (locationStates[name].state === 'green') continue;
+      var feature = featureMap[name];
+      if (!feature) continue;
+      var b = featureBounds(feature);
+      if (!allBounds) allBounds = b;
+      else allBounds.extend(b);
+    }
+    return allBounds;
+  }
+
+  // The events panel floats over the right edge of the map on desktop, and over
+  // the bottom on mobile. fitBounds() with a uniform padding centres a location
+  // in the *viewport*, so a selected city lands underneath the panel and is
+  // clipped in half. Feed the panel's real measured footprint back in as
+  // asymmetric padding so the target always settles in open map.
+  function getMapPadding(base) {
+    base = (typeof base === 'number') ? base : 40;
+    var pad = { top: base, bottom: base, left: base, right: base };
+    var panel = document.getElementById('unified-panel');
+    if (!panel) return pad;
+    // Only .slim / .full are on-screen; the bare element is display:none.
+    if (!panel.classList.contains('slim') && !panel.classList.contains('full')) return pad;
+    var r = panel.getBoundingClientRect();
+    if (!r.width || !r.height) return pad;
+
+    var canvas = (typeof map !== 'undefined' && map.getCanvas) ? map.getCanvas() : null;
+    var w = (canvas && canvas.clientWidth) || window.innerWidth || 0;
+    var h = (canvas && canvas.clientHeight) || window.innerHeight || 0;
+
+    if (window.matchMedia('(min-width: 601px)').matches) {
+      // Reserve the right strip only when the card is tall enough that a
+      // centred target would actually land behind it. The slim (scrubbing) card
+      // is ~120px tall, so reserving the full column would shove every city to
+      // the far left for no reason. Below that, a little top padding is enough.
+      if (r.height > h * 0.45) {
+        pad.right = r.width + 28; // card width + its inset + a breathing gap
+      } else {
+        pad.top = Math.max(pad.top, r.height + 28);
+      }
+    } else {
+      pad.bottom = r.height + 16;
+    }
+
+    // MapLibre throws if padding leaves no room to draw. Keep a floor of 120px
+    // of usable map on each axis and give up the extra padding instead. Clamp
+    // top as well as bottom: the slim card now feeds a measured value into
+    // pad.top, so on a short viewport top alone could exceed the budget.
+    if (w && pad.left + pad.right > w - 120) pad.right = Math.max(0, w - 120 - pad.left);
+    if (h && pad.top + pad.bottom > h - 120) {
+      pad.bottom = Math.max(0, h - 120 - pad.top);
+      if (pad.top > h - 120) { pad.top = Math.max(0, h - 120); pad.bottom = 0; }
+    }
+    return pad;
+  }
+  try { window.getMapPadding = getMapPadding; } catch (e) {}
+
+function maybeZoomToEvent() {
+    var bounds = getActiveEventBounds();
+    if (!bounds) return;
+    isZoomingProgrammatically = true;
+    map.fitBounds(bounds, { 
+      padding: getMapPadding(80), 
+      maxZoom: 10,
+      speed: 0.6,          // Slower flight speed (default is 1.2)
+      curve: 1.1,          // Flatter curve reduces the "zoom out and bounce back" effect
+      maxDuration: 2500,   // Cap the animation time so it doesn't drag on long flights
+      essential: true
+    });
+  }
+   
+  // --- Status indicator ---
+  function setStatus(state, text) {
+    var dot = document.getElementById('statusDot');
+    var txt = document.getElementById('statusText');
+    var statusEl = document.getElementById('status');
+    dot.className = 'indicator indicator-' + state;
+    txt.textContent = text;
+    if (state !== 'err') {
+      statusEl.style.cursor = '';
+      lastErrorMsg = '';
+      document.getElementById('errorDetail').style.display = 'none';
+    } else {
+      statusEl.style.cursor = 'pointer';
+    }
+  }
+
+ function setStatusHTML(state, html) {
+    var dot = document.getElementById('statusDot');
+    var txt = document.getElementById('statusText');
+    var statusEl = document.getElementById('status');
+    dot.className = 'indicator indicator-' + state;
+    txt.innerHTML = html;
+    var link = document.getElementById('lastAlertLink');
+    if (link) {
+      link.addEventListener('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        openTimelineToLastEvent();
+      });
+    }
+    var zoomLink = document.getElementById('zoomAlertsLink');
+    if (zoomLink) {
+      zoomLink.addEventListener('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        closeTimelinePanel();
+        maybeZoomToEvent();
+      });
+    }
+    statusEl.style.cursor = '';
+    lastErrorMsg = '';
+    document.getElementById('errorDetail').style.display = 'none';
+  }
+   
+  // --- Fetching ---
+  function stripBom(text) {
+    return text.replace(/^\ufeff/, '');
+  }
+
+ const WORKER_INGEST_URL = "/api/ingest"; // old collector domain is dead (NXDOMAIN); relay via Pages Function -> redmap-ingestion worker
+
+function forwardAlertToCache(alertData) {
+  if (!alertData) return;
+
+  // Map the HFC data to the format our Worker expects.
+  // HFC alerts typically use 'data' for the array of cities and 'title' for the threat.
+  const payload = {
+    id: alertData.id || crypto.randomUUID(),
+    zone: alertData.data ? alertData.data[0] : "Unknown Zone", 
+    cities: alertData.data || [], 
+    timestamp: new Date().toISOString(),
+    threat: alertData.title || "Alert"
+  };
+
+  // Fire and forget (POST to Cloudflare)
+  fetch(WORKER_INGEST_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  }).catch(function(err) {
+    console.error("❌ Failed to push to Cloudflare Cache:", err);
+  });
+}
+   
+  function fetchLiveAlerts() {
+   if (isStyleLoading) {
+        console.warn("Fetch blocked: Style is currently reloading.");
+        return;
+    }
+    apiFetch('alerts')
+      .then(function(resp) {
+        lastCfColo = resp.headers.get('X-CF-Colo') || lastCfColo;
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        return resp.text();
+      })
+      .then(function(text) {
+        text = stripBom(text).trim();
+        liveErrors = 0;
+        try { sessionStorage.setItem('oref-last-poll', String(Date.now())); } catch(e) {}
+        if (initialized && isLiveMode && historyErrors <= 3) updateLiveStatus();
+        
+        if (!text || text === "[]") {
+            lastLiveAlertPayload = ''; // Clear memory when quiet
+            return;
+        }
+
+        // 🚨 FRONTEND DEDUPLICATION FIX: Stop processing if exact payload hasn't changed
+        if (text === lastLiveAlertPayload) return;
+        lastLiveAlertPayload = text;
+
+        var parsedData;
+        try { parsedData = JSON.parse(text); }
+        catch (e) { return; }
+    
+        var alertArray = Array.isArray(parsedData) ? parsedData : [parsedData];
+        alertArray.forEach(function(alert) {
+            // Your existing logic to paint the map
+            processLiveAlert(alert);
+            // 👇 THE INTEGRATION: Send it to the backup cache immediately
+            forwardAlertToCache(alert);
+        });
+      })
+      .catch(function(err) {
+        liveErrors++;
+        lastErrorMsg = 'Live alerts: ' + err.message;
+        if (liveErrors > 3) setStatus('err', 'בעיית תקשורת לפיקוד העורף. מנסה שוב...');
+        console.error('Live poll error:', err);
+      });
+  } // This closes fetchLiveAlerts
+    
+// The history feed returns ~1 hour of entries and is polled every 10s, so the
+// same entry arrives ~360 times. Replaying it is not free: every replay re-runs
+// state transitions, and an old all-clear re-applied against a newly-arrived
+// live alert is exactly the race the green-recency guard in setLocationState
+// exists to stop. Dedup on (location-set + title + timestamp) so each distinct
+// event is applied once.
+var processedHistoryKeys = new Set();
+var PROCESSED_HISTORY_KEYS_MAX = 20000;
+
+function historyEntryKey(entry) {
+    var data = Array.isArray(entry.data) ? entry.data.join(',') : String(entry.data || '');
+    return (entry.alertDate || '') + '|' + (entry.title || '') + '|' + data;
+}
+   
+function processHistoryEntry(entry) {
+    if (!entry || !entry.data) return;
+
+    // Oref sometimes omits the title (drones especially). The live path already
+    // reconstructs one; do the same here rather than dropping the entry, which
+    // would leave a permanent hole in history and the timeline.
+    var rawTitle = entry.title || '';
+    if (!rawTitle) {
+        if (entry.desc) {
+            rawTitle = String(entry.desc).split('-')[0].trim();
+        } else {
+            rawTitle = 'התרעת צבע אדום';
+        }
+    }
+
+    // Classify the title alone (see the live path — concatenating desc let a
+    // generic shelter desc outrank pre-alert titles and turn them red).
+    var state = classifyTitle(rawTitle.replace(/\s+/g, ' ').trim());
+    if (state === 'inherit') {
+      var descThreat = explicitThreatIn(String(entry.desc || ''));
+      if (descThreat) state = descThreat;
+    }
+    // History API sends `data` as a single location string. Never pre-split on
+    // comma -- 21 real polygon names contain one. expandAndResolveLocations()
+    // resolves the whole string first and splits only if every fragment matches.
+    var rawLocations = Array.isArray(entry.data) ? entry.data : [String(entry.data)];
+    var locations = expandAndResolveLocations(rawLocations);
+    var cleanTitle = rawTitle.replace(/\s+/g, ' ').trim();
+    var ts = parseAlertDate(entry.alertDate);
+   
+    // 🚨 GLOBAL CLEAR SAFETY NET: If Oref sends "All Regions Clear", wipe the board
+    if (state === 'green' && (locations.includes('כלל האזורים') || locations.includes('כלל היישובים'))) {
+        for (var activeCity in locationStates) {
+            applyThreatEvent(activeCity, cleanTitle, 'green', ts);
+        }
+        return;
+    }
+    
+    for (var i = 0; i < locations.length; i++) {
+      // Already canonical polygon keys from expandAndResolveLocations().
+      var loc = locations[i];
+      if (!loc) continue;
+      recordHistory(loc, cleanTitle, entry.alertDate || '', resolveInheritedState(state, loc));
+      
+      // Update Timeline
+      if (ts && isViewingToday()) {
+          var compositeKey = loc + '|' + (entry.alertDate || '').replace('T', ' ');
+          if (!extendedRids.has(compositeKey)) {
+              extendedRids.add(compositeKey);
+              extendedHistory.push({ location: loc, title: cleanTitle, alertDate: ts, state: state });
+          }
+      }
+      
+      // Only attempt to paint the map if the resolved city actually exists in your polygons
+      if (nameToId[loc] !== undefined) {
+          var locState = resolveInheritedState(state, loc);
+          if (isLiveMode) {
+            applyThreatEvent(loc, cleanTitle, locState, ts);
+          } else if (liveLocationStates) {
+            updateShadowState(loc, locState, ts);
+          }
+      }
+    }
+  }
+
+function processHistoryEntries(entries) {
+    if (!Array.isArray(entries)) return;
+
+    // Process chronologically so priority state overrides work correctly
+    var chronological = entries.slice().reverse();
+    var stateMutated = false;
+
+    // Guard against unbounded growth over a long-lived session. The feed only
+    // covers ~1 hour, so anything evicted here cannot reappear.
+    if (processedHistoryKeys.size > PROCESSED_HISTORY_KEYS_MAX) {
+        processedHistoryKeys.clear();
+    }
+
+    for (var i = 0; i < chronological.length; i++) {
+        var entry = chronological[i];
+        if (!entry) continue;
+        var key = historyEntryKey(entry);
+        if (processedHistoryKeys.has(key)) continue;
+        processedHistoryKeys.add(key);
+        processHistoryEntry(entry);
+        stateMutated = true;
+    }
+    if (stateMutated) {
+        document.dispatchEvent(new CustomEvent('app:stateChanged'));
+    }
+}
+   
+function fetchHistory(onDone) {
+    apiFetch('history')
+      .then(function(resp) {
+        lastCfColo = resp.headers.get('X-CF-Colo') || lastCfColo;
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        return resp.text();
+      })
+      .then(function(text) {
+        text = stripBom(text).trim();
+
+        // The feed answered successfully — only now is it honest to report a
+        // healthy connection. (This used to run on a synthesised empty payload,
+        // so a dead backend still showed as "Live".)
+        historyErrors = 0;
+        initialized = true;
+        updateLiveStatus();
+
+        if (!text) { if (onDone) onDone(); return; }
+        
+        var entries;
+        try {
+          entries = JSON.parse(text);
+        } catch (parseErr) {
+          console.warn('History JSON truncated, retrying...', parseErr);
+          return fetch(PROXY_BASE + apiPrefix + '/history', { cache: 'no-store' })
+            .then(function(r) { return r.text(); })
+            .then(function(t) {
+              t = stripBom(t).trim();
+              try { entries = JSON.parse(t); }
+              catch (e) { throw e; }
+              processHistoryEntries(entries);
+              
+               if (typeof rebuildTimelineFn === 'function') rebuildTimelineFn();
+               if (onDone) onDone();
+            });
+        }
+        
+        // 1. Process the map polygons
+        processHistoryEntries(entries);
+        
+        // 2. Update the Timeline UI
+         if (typeof rebuildTimelineFn === 'function') rebuildTimelineFn();
+
+        // 3. Finish connection
+        if (onDone) onDone();
+      }) // <-- Fixed: Only ONE closing bracket here!
+      .catch(function(err) {
+        historyErrors++;
+        lastErrorMsg = 'Alert history: ' + err.message;
+        if (historyErrors > 3) {
+          setStatus('err', 'תקלה בטעינת התרעות קודמות. מנסה שוב...');
+        }
+        if (onDone) setTimeout(function() { fetchHistory(onDone); }, 1000);
+      });
+  }
+   
+  function parseAlertDate(dateStr) {
+    // Format: "2026-03-03 12:34:56"
+    if (!dateStr) return null;
+    var d = new Date(dateStr.replace(' ', 'T'));
+    return isNaN(d.getTime()) ? null : d.getTime();
+  }
+
+  // --- Extended history (timeline) ---
+function prefetchDayHistory(date) {
+    if (!date) return;
+
+    var url = PROXY_BASE + '/api/day-history?date=' + encodeURIComponent(date);
+    
+    return fetch(url)
+        .then(function(res) {
+            // Check the Content-Type before parsing
+            var contentType = res.headers.get("content-type");
+            if (contentType && contentType.indexOf("application/json") !== -1) {
+                return res.json();
+            } else {
+                // If it's not JSON, throw an error or handle the non-JSON body
+                return res.text().then(function(text) {
+                    throw new Error("Received non-JSON response: " + text);
+                });
+            }
+        })
+        .then(function(data) {
+            // Process your data
+        })
+        .catch(function(err) {
+            console.error("Day history fetch error (likely caught an HTML 404):", err);
+        });
+}
+
+  function fetchExtendedHistory(onDone) {
+    var dateParam = timelineDate || todayDateStr();
+    var finalized = false;
+
+function processEntries(entries) {
+      var added = 0;
+      for (var i = 0; i < entries.length; i++) {
+        var e = entries[i];
+        if (!e.data || !e.category_desc) continue;
+        var rid = String(e.rid || '');
+        var title = (e.category_desc || '').replace(/\s+/g, ' ').trim();
+        var state = classifyTitle(title);
+        var ts = parseAlertDate(e.alertDate);
+        if (!ts) continue;
+        
+        // 🚨 THE SPLITTER & UNROLLER
+        // Single raw string; the expander decides whether it is one place or many.
+        var rawLocations = Array.isArray(e.data) ? e.data : [String(e.data)];
+        var locations = expandAndResolveLocations(rawLocations);
+
+        // Historical fallback (history replay only): a 2023-era zone name no current
+        // polygon knows. Resolve via the explicit alias/container tables only -
+        // deterministic table lookup, never fuzzy-matched. Live alert processing never reaches this path.
+        if (!locations.length && rawLocations.length === 1) {
+          var fkey = foldName(rawLocations[0]);
+          var aliasTarget = HISTORICAL_ALIASES[fkey] || HISTORICAL_CONTAINERS[fkey];
+          if (aliasTarget) locations = [aliasTarget];
+        }
+
+        for (var j = 0; j < locations.length; j++) {
+            var location = locations[j];
+            if (!location) continue;
+            var ridKey = rid ? (location + '|' + rid) : '';
+            var compositeKey = location + '|' + (e.alertDate || '').replace('T', ' ');
+            if (ridKey && extendedRids.has(ridKey)) continue;
+            if (extendedRids.has(compositeKey)) continue;
+            if (ridKey) extendedRids.add(ridKey);
+            extendedRids.add(compositeKey);
+            // extendedHistory keeps 'inherit' so reconstructStateAt() can
+            // resolve it against the state at that point in the replay. The
+            // per-location history LIST needs a concrete colour now, and the
+            // documented default for a shelter command with nothing preceding
+            // it is red.
+            extendedHistory.push({ location: location, title: title, alertDate: ts, state: state });
+            recordHistory(location, title, e.alertDate || '', state === 'inherit' ? 'red' : state);
+            added++;
+        }
+      }
+      return added;
+    }
+
+
+    function finalize() {
+      if (finalized) return; // already handled (404 or non-array)
+      finalized = true;
+      extendedHistory.sort(function(a, b) { return a.alertDate - b.alertDate; });
+      var bounds = viewingDayBounds();
+      timelineMin = bounds.start;
+      timelineMax = bounds.end;
+      console.log('Day history (' + dateParam + '):', extendedHistory.length, 'entries');
+      dayHistoryReady = true;
+      if (onDone) onDone();
+    }
+
+    // Use prefetched data if available
+    var cached = prefetchedDayHistory[dateParam];
+    if (cached) delete prefetchedDayHistory[dateParam];
+
+    (cached
+      ? Promise.resolve(cached)
+      : fetch('/api/day-history?date=' + dateParam)
+          .then(function(resp) {
+            if (resp.status === 404) {
+              console.log('No day-history data for', dateParam);
+              return;
+            }
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            return resp.json();
+          })
+    )
+      .then(function(entries) {
+        if (!entries) return; // 404 case already handled
+        if (!Array.isArray(entries)) return;
+        processEntries(entries);
+      })
+      .then(finalize)
+      .catch(function(err) {
+        console.error('Day history fetch error:', err);
+        dayHistoryReady = true;
+        if (onDone) onDone();
+        updateLiveStatus(); 
+      });
+  }
+
+  // Renders the retired-zone point markers for the current replay position and
+  // keeps the history-mode legend honest: points are 2024-09 list positions,
+  // not official alert-zone polygons.
+  function reconstructStateAt(targetTime) {
+    cancelPolygonHint();
+    // Clear all polygons
+    for (var name in locationStates) {
+      resetFeatureStyle(name);
+    }
+    locationStates = {};
+
+    // Replay history up to targetTime
+    var accumulated = {}; // {location: {state, since}}
+    // Must include brown — omitting it made PRIORITY['brown'] fall back to 0,
+    // so terrorist-infiltration alerts were silently discarded during replay
+    // whenever any other state was already active at that location.
+    var PRIORITY = { red: 5, brown: 3, purple: 2, yellow: 1, green: 0, hazmat: 3, earthquake: 4 };
+    for (var i = 0; i < extendedHistory.length; i++) {
+      var e = extendedHistory[i];
+      if (e.alertDate > targetTime) break;
+      var existing = accumulated[e.location];
+      // A generic shelter command inherits the threat already active at replay
+      // position, defaulting to red.
+      var eState = e.state;
+      if (eState === 'inherit') {
+        eState = (existing && (existing.state === 'red' || existing.state === 'purple' || existing.state === 'brown' || existing.state === 'hazmat' || existing.state === 'earthquake'))
+          ? existing.state
+          : 'red';
+      }
+      if (existing) {
+        if (eState === 'green') {
+          accumulated[e.location] = { state: 'green', since: e.alertDate };
+          } else if (eState === existing.state || (PRIORITY[eState] || 0) > (PRIORITY[existing.state] || 0)) {
+          accumulated[e.location] = { state: eState, since: e.alertDate };
+        }
+      } else {
+        accumulated[e.location] = { state: eState, since: e.alertDate };
+      }
+    }
+
+    // Apply accumulated state
+    for (var loc in accumulated) {
+      var s = accumulated[loc].state;
+      var sinceTime = accumulated[loc].since;
+      if (nameToId[loc] === undefined) continue; // unresolved historical name: nothing to show
+      if (s === 'green') {
+        var elapsed = targetTime - sinceTime;
+        if (elapsed >= GREEN_FADE_MS) continue; // already faded
+        var opacity = 0.5 * (1 - elapsed / GREEN_FADE_MS);
+        applyFeatureStyle(loc, 'green', opacity);
+      } else {
+        if (targetTime - sinceTime >= ALERT_MAX_AGE_MS) continue; // stale alert
+        applyFeatureStyle(loc, s, 0.3);
+      }
+      locationStates[loc] = { state: s, since: sinceTime };
+    }
+    // Re-apply highlight for selected location.
+    // Don't call _removePanelHighlight here — reconstructStateAt already reset all
+    // feature styles above, so restoring the saved state would undo applyFeatureStyle.
+    // Just clear the saved state and re-read what applyFeatureStyle just set.
+    if (selectedLocation) {
+      _panelHighlightName = null;
+      _panelHighlightSaved = null;
+      _applyPanelHighlight(selectedLocation);
+    }
+    document.dispatchEvent(new CustomEvent('app:stateChanged'));
+  }
+
+  function saveLiveState() {
+    if (liveLocationStates) return; // already saved
+    liveLocationStates = {};
+    for (var name in locationStates) {
+      var entry = locationStates[name];
+      liveLocationStates[name] = { state: entry.state, since: entry.since };
+    }
+  }
+
+  function restoreLiveState() {
+    // Clear all polygons
+    var names = Object.keys(locationStates);
+    for (var i = 0; i < names.length; i++) {
+      removeLocation(names[i]);
+    }
+    // Re-apply saved live state
+    if (liveLocationStates) {
+      for (var name in liveLocationStates) {
+        var s = liveLocationStates[name];
+        if (s.state === 'green' && (Date.now() - s.since) >= GREEN_FADE_MS) continue;
+        setLocationState(name, s.state, s.since);
+      }
+    }
+    liveLocationStates = null;
+    document.dispatchEvent(new CustomEvent('app:stateChanged'));
+  }
+
+  function updateShadowState(name, state, since) {
+    if (!liveLocationStates) return;
+    var PRIORITY = { red: 5, brown: 3, purple: 2, yellow: 1, green: 0, hazmat: 3, earthquake: 4 };
+    var existing = liveLocationStates[name];
+    if (existing) {
+      if (state === 'green') {
+        liveLocationStates[name] = { state: 'green', since: since || Date.now() };
+      } else if (existing.state === state) {
+        return;
+      } else if ((PRIORITY[existing.state] || 0) > (PRIORITY[state] || 0)) {
+        return;
+      } else {
+        liveLocationStates[name] = { state: state, since: since || Date.now() };
+      }
+    } else {
+      liveLocationStates[name] = { state: state, since: since || Date.now() };
+    }
+  }
+
+  function initTimeline() {
+    var container = document.getElementById('timeline-btn');
+    var btnRow = document.getElementById('timeline-btn-row');
+    var slider = document.getElementById('timeline-slider');
+    var label = document.getElementById('timeline-label');
+    var playBtn = document.getElementById('tl-play');
+
+    var prevBtn = document.getElementById('tl-prev');
+    var nextBtn = document.getElementById('tl-next');
+    var ticksEl = document.getElementById('timeline-ticks');
+
+    var datePrevBtn = document.getElementById('tl-date-prev');
+    var dateNextBtn = document.getElementById('tl-date-next');
+    var dateLabel = document.getElementById('tl-date-label');
+    var dateInput = document.getElementById('tl-date-input'); // 🚨 NEW: Grab the calendar
+    var onDayHistoryReady = null; // callback when day-history fetch completes
+
+    container.classList.add('has-data');
+    
+    var TICK_COLORS = { red: '#e74c3c', brown: '#8b4513', purple: '#9b59b6', yellow: '#f1c40f', green: '#2ecc71', hazmat: '#009999', earthquake: '#ff8800' };
+    var PLAY_SPEED = 510;
+
+    function updateDateNav() {
+      var d = timelineDate || todayDateStr();
+      
+      // Update the invisible calendar to the currently viewed date and set min/max limits
+      dateInput.value = d;
+      dateInput.max = todayDateStr();
+      dateInput.min = DAY_HISTORY_MIN_DATE;
+
+      // 🚨 ALWAYS show the real date! (formatDateLabel already knows to say "היום" for today)
+      dateLabel.innerHTML = '📅 ' + formatDateLabel(d);
+
+      // 🚨 Show the arrows at all times, but just disable the 'Next' button if it's today
+      datePrevBtn.style.display = 'block';
+      dateNextBtn.style.display = 'block';
+      
+      datePrevBtn.disabled = (d <= DAY_HISTORY_MIN_DATE);
+      dateNextBtn.disabled = isViewingToday();
+    }
+    updateDateNav();
+
+             function rebuildTimeline(seekMode) {
+      var bounds = viewingDayBounds();
+      timelineMin = bounds.start;
+      timelineMax = bounds.end;
+      
+      if (extendedHistory.length > 0) {
+        extendedHistory.sort(function(a, b) { return a.alertDate - b.alertDate; });
+        renderTicks();
+        if (seekMode === 'none') {
+          var now = clampTime(Date.now());
+          slider.value = sliderFromTime(now);
+          
+          if (isLiveMode) {
+            label.textContent = formatTime(now);
+          } else {
+            enterHistoryMode(now);
+          }
+          
+        } else if (eventPeaks.length > 0) {
+          if (seekMode === 'first') {
+            seekTo(eventPeaks[0]);
+          } else {
+            seekTo(eventPeaks[eventPeaks.length - 1]);
+          }
+        } else {
+          slider.value = 999;
+          enterHistoryMode(timelineMax);
+        }
+        label.style.opacity = '';
+      } else {
+        ticksEl.innerHTML = '';
+        slider.value = 999;
+        if (!isViewingToday()) {
+          // Clear alert colors left over from a previously viewed day. Without
+          // this, a day with no entries kept the last busy day's polygons lit
+          // while the label said there was no data for the date.
+          for (var staleName in locationStates) {
+            resetFeatureStyle(staleName);
+          }
+          locationStates = {};
+        }
+
+        if (isViewingToday()) {
+          label.textContent = 'אין התרעות היום'; 
+          label.style.opacity = '0.7';
+          // Ensure we don't accidentally display a stuck timestamp on an empty slider
+          if (isLiveMode) {
+            label.textContent = formatTime(clampTime(Date.now()));
+          }
+        } else {
+          label.textContent = 'אין נתונים בתאריך זה';
+          label.style.opacity = '0.5';
+        }
+      }
+    }
+
+         function switchDate(newDate, onSwitched) {
+      var carryover = [];
+      if (newDate < (timelineDate || todayDateStr())) {
+        var carryStart = new Date(newDate + 'T23:00:00').getTime();
+        var carryEnd = new Date(newDate + 'T23:59:59.999').getTime();
+        carryover = extendedHistory.filter(function(e) {
+          return e.alertDate >= carryStart && e.alertDate <= carryEnd;
+        });
+      }
+
+      dayHistoryReady = false;
+      extendedHistory = [];
+      extendedRids = new Set();
+      locationHistory = {};
+      _locationEventList = [];
+      if (selectedLocation) document.getElementById('up-event-list').innerHTML = '';
+      lastHistoryDate = null;
+      stopPlay();
+      timelineDate = (newDate === todayDateStr()) ? null : newDate;
+      var bounds = viewingDayBounds();
+      timelineMin = bounds.start;
+      timelineMax = bounds.end;
+      updateDateNav();
+      label.textContent = 'טוען...';
+      label.style.opacity = '0.5';
+      ticksEl.innerHTML = '';
+
+      function mergeCarryover() {
+        for (var i = 0; i < carryover.length; i++) {
+          extendedHistory.push(carryover[i]);
+        }
+        if (carryover.length > 0) {
+          extendedHistory.sort(function(a, b) { return a.alertDate - b.alertDate; });
+        }
+      }
+
+      if (isViewingToday()) {
+        if (!historyPollId) {
+          historyPollId = setInterval(function() { fetchHistory(); }, HISTORY_POLL_MS);
+        }
+        fetchHistory();
+        fetchExtendedHistory(function() {
+          mergeCarryover();
+          var initialSeek = extendedHistory.length > 0 ? 'first' : 'none';
+          rebuildTimeline(initialSeek);
+          prefetchPrevDay();
+          if (selectedLocation) {
+            _scrollSyncLock = true;
+            buildLocationEventList(selectedLocation);
+            renderEventList();
+            requestAnimationFrame(function() { _scrollSyncLock = false; });
+          }
+          // 🚨 EXECUTE HERE: Run the callback AFTER the live day lists are built
+          if (onSwitched) onSwitched(); 
+        });
+      } else {
+        if (historyPollId) {
+          clearInterval(historyPollId);
+          historyPollId = null;
+        }
+        fetchExtendedHistory(function() {
+          mergeCarryover();
+          rebuildTimeline('first');
+          prefetchPrevDay();
+          if (selectedLocation) {
+            _scrollSyncLock = true;
+            buildLocationEventList(selectedLocation);
+            renderEventList();
+            requestAnimationFrame(function() { _scrollSyncLock = false; });
+          }
+          // 🚨 EXECUTE HERE: Run the callback AFTER the historical day lists are built
+          if (onSwitched) onSwitched(); 
+        });
+      }
+    }
+
+
+    function prefetchPrevDay() {
+      var prevDay = addDays(timelineDate || todayDateStr(), -1);
+      if (prevDay >= DAY_HISTORY_MIN_DATE) prefetchDayHistory(prevDay);
+    }
+
+    // --- Open / Close ---
+    function isOpen() { return unifiedPanelState !== 'closed'; }
+
+    function openTimeline(opts) {
+      // Delegated to openSlimPanel + timeline init logic
+      var noSeek = opts && opts.noSeek;
+      locationOpenedFromClosed = false; // 🚨 Reset the flag when explicitly opening timeline
+      openSlimPanel();      updateDateNav();
+      if (!dayHistoryReady) {
+        label.textContent = '\u05D8\u05D5\u05E2\u05DF...';
+        label.style.opacity = '0.5';
+        onDayHistoryReady = function() {
+          onDayHistoryReady = null;
+          rebuildTimeline(noSeek ? 'none' : undefined);
+          prefetchPrevDay();
+          // If location selected, refresh event list
+          if (selectedLocation) {
+            _scrollSyncLock = true;
+            buildLocationEventList(selectedLocation);
+            renderEventList();
+            requestAnimationFrame(function() { _scrollSyncLock = false; });
+          }
+        };
+      } else {
+        rebuildTimeline(noSeek ? 'none' : undefined);
+        prefetchPrevDay();
+        // Refresh day-history for today in background
+        if (isViewingToday()) {
+          fetchExtendedHistory(function() {
+            if (isOpen()) rebuildTimeline(noSeek ? 'none' : undefined);
+          });
+        }
+      }
+    }
+
+    function closeTimeline() {
+      if (!isOpen()) return;
+      closeUnifiedPanel();
+      stopPlay();
+
+      // If viewing a past date, reset to today
+      if (!isViewingToday()) {
+        timelineDate = null;
+        extendedHistory = [];
+        extendedRids = new Set();
+        locationHistory = {};
+        var bounds = viewingDayBounds();
+        timelineMin = bounds.start;
+        timelineMax = bounds.end;
+        lastHistoryDate = null;
+        dayHistoryReady = false;
+        updateDateNav();
+        // Restart history polling
+        if (!historyPollId) {
+          historyPollId = setInterval(function() { fetchHistory(); }, HISTORY_POLL_MS);
+        }
+        fetchHistory();
+        fetchExtendedHistory(function() {
+          // Data ready for next open
+        });
+      }
+
+      // Restore live state before zoom decision so getActiveEventBounds reflects reality
+      enterLiveMode();
+
+      if (shouldAutoZoomToEvents() && getActiveEventBounds()) {
+        maybeZoomToEvent();
+      } else if (!drivingModeFeatureEnabled && getEffectiveZoomMode() === 'manual') {
+        isZoomingProgrammatically = true;
+        map.flyTo({ center: [DEFAULT_CENTER[1], DEFAULT_CENTER[0]], zoom: DEFAULT_ZOOM });
+      } else {
+        applySelectedZoomMode(true);
+      }
+    }
+    closeTimelinePanel = closeTimeline;
+
+    // Listen for seekTo events from unified panel wiring
+    document.addEventListener('app:seekTo', function(e) {
+      var time = e.detail && e.detail.time;
+      if (time) {
+        stopPlay();
+        seekTo(time);
+      }
+    });
+
+    // Called when dayHistoryReady becomes true (from fetchExtendedHistory callback in init)
+    rebuildTimelineFn = function() {
+      if (onDayHistoryReady) {
+        onDayHistoryReady();
+      }
+    };
+
+            openTimelineToLastEvent = function() {
+      // 1. If today has data, jump straight down
+      if (extendedHistory.length > 0) {
+        if (!isOpen()) openTimeline();
+        else computeEventPeaks();
+        stopPlay();
+        if (eventPeaks.length > 0) {
+          seekTo(eventPeaks[eventPeaks.length - 1]);
+          setTimeout(function() { if(currentViewTime) syncScrollToTime(currentViewTime); }, 50);
+        } else {
+          seekTo(timelineMax);
+        }
+        return;
+      }
+
+      // 2. If today is empty, locate the fallback timestamp
+      var targetTs = 0;
+      if (typeof lastDangerTime !== 'undefined' && lastDangerTime > 0) {
+        targetTs = lastDangerTime;
+      }
+
+      if (targetTs > 0) {
+        var d = new Date(targetTs);
+        var jstDate = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Jerusalem' }).format(d);
+        
+        if (!isOpen()) openTimeline({ noSeek: true });
+        
+        if (jstDate !== todayDateStr()) {
+          switchDate(jstDate, function() {
+            seekTo(targetTs);
+            // 🚨 THE FIX: Force the layout alignment AFTER the template rows populate
+            setTimeout(function() {
+                if (selectedLocation) {
+                    syncScrollToTime(targetTs);
+                }
+            }, 50);
+          });
+        } else {
+          seekTo(targetTs);
+          setTimeout(function() { syncScrollToTime(targetTs); }, 50);
+        }
+      } else {
+        if (!isOpen()) openTimeline();
+      }
+    };
+
+
+      // 2. If today is completely quiet, look at your lastDangerTime or historical timestamps
+      var targetTs = 0;
+      if (typeof lastDangerTime !== 'undefined' && lastDangerTime > 0) {
+        targetTs = lastDangerTime;
+      }
+
+    window.show_history = function(timestamp) {
+      var raw = timestamp;
+      if (raw instanceof Date) raw = raw.toISOString();
+      if (typeof raw !== 'string') {
+        throw new Error('show_history(timestamp) expects a timestamp string like 2026-03-27T14:28:00');
+      }
+      var normalized = raw.trim();
+      if (/^\d{2}:\d{2}:\d{2}$/.test(normalized)) {
+        normalized = todayDateStr() + 'T' + normalized;
+      }
+      if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(normalized)) {
+        throw new Error('Invalid timestamp. Use YYYY-MM-DDTHH:mm:ss, YYYY-MM-DDTHH:mm, or HH:mm:ss');
+      }
+      if (normalized.length === 16) normalized += ':00';
+
+      var targetTime = new Date(normalized).getTime();
+      if (isNaN(targetTime)) {
+        throw new Error('Invalid timestamp: ' + raw);
+      }
+
+      var targetDate = normalized.slice(0, 10);
+      if (targetDate < DAY_HISTORY_MIN_DATE) {
+        throw new Error('No history available before ' + DAY_HISTORY_MIN_DATE);
+      }
+      if (!isOpen()) openTimeline();
+
+      return new Promise(function(resolve) {
+        function finish() {
+          stopPlay();
+          seekTo(targetTime);
+          resolve({
+            timestamp: normalized,
+            viewingDate: targetDate,
+            appliedTime: new Date(currentViewTime).toISOString(),
+            isLiveMode: isLiveMode
+          });
+        }
+
+        var currentDate = timelineDate || todayDateStr();
+        if (currentDate !== targetDate) {
+          switchDate(targetDate, finish);
+        } else if (!dayHistoryReady) {
+          var prevReady = onDayHistoryReady;
+          onDayHistoryReady = function() {
+            onDayHistoryReady = null;
+            if (prevReady) prevReady();
+            finish();
+          };
+        } else {
+          finish();
+        }
+      });
+    };
+
+    // --- Date nav buttons ---
+    // 🚨 NEW: Force the calendar to open on desktop browsers
+    document.getElementById('tl-date-wrapper').addEventListener('click', function() {
+      try {
+        dateInput.showPicker();
+      } catch (e) {
+        // Fallback for older browsers
+        dateInput.focus();
+      }
+    });
+      
+    // 🚨 NEW: Calendar Selection Listener
+    dateInput.addEventListener('change', function(e) {
+      var selectedDate = e.target.value;
+      if (!selectedDate) return;
+      
+      // Safety net: Prevent them from picking a future date or going too far back
+      if (selectedDate > todayDateStr()) selectedDate = todayDateStr();
+      if (selectedDate < DAY_HISTORY_MIN_DATE) selectedDate = DAY_HISTORY_MIN_DATE;
+
+      // If they picked a new date, load it!
+      if (selectedDate !== (timelineDate || todayDateStr())) {
+        switchDate(selectedDate);
+      }
+    });
+      
+    datePrevBtn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var cur = timelineDate || todayDateStr();
+      if (cur <= DAY_HISTORY_MIN_DATE) return;
+      switchDate(addDays(cur, -1));
+    });
+
+    dateNextBtn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      if (isViewingToday()) return;
+      var cur = timelineDate || todayDateStr();
+      switchDate(addDays(cur, 1));
+    });
+
+    btnRow.addEventListener('click', function(e) {
+      if (drivingModeFeatureEnabled) return;
+      if (!isOpen()) {
+        openTimeline();
+      }
+    });
+
+    // --- Helpers ---
+    function timeFromSlider(val) {
+      return timelineMin + (val / 999) * (timelineMax - timelineMin);
+    }
+
+    function sliderFromTime(time) {
+      return Math.round(((time - timelineMin) / (timelineMax - timelineMin)) * 999);
+    }
+
+    function formatTime(ms) {
+      var d = new Date(ms);
+      return String(d.getHours()).padStart(2, '0') + ':' +
+             String(d.getMinutes()).padStart(2, '0') + ':' +
+             String(d.getSeconds()).padStart(2, '0');
+    }
+
+    function clampTime(t) {
+      var max = isViewingToday() ? Math.min(timelineMax, Date.now()) : timelineMax;
+      return Math.max(timelineMin, Math.min(max, t));
+    }
+
+    // --- Mode switching ---
+    function enterLiveMode() {
+    document.body.classList.remove('history-mode-active'); // 🚨 Shows disclaimer
+      if (isLiveMode) return;
+      isLiveMode = true;
+      currentViewTime = 0;
+      document.getElementById('historyTimeLabel').style.display = 'none';
+      restoreLiveState();
+      updateLiveStatus();
+    }
+
+    function enterHistoryMode(time) {
+  document.body.classList.add('history-mode-active'); // 🚨 Hides disclaimer
+  
+  if (isLiveMode) {
+    saveLiveState();
+    isLiveMode = false;
+    // Revert status text to generic label (resident count is live-only)
+    var zl = document.getElementById('zoomAlertsLink');
+    if (zl) zl.innerHTML = '\u05D4\u05EA\u05E8\u05E2\u05D5\u05EA \u05E4\u05E2\u05D9\u05DC\u05D5\u05EA';
+  }
+  
+  currentViewTime = time;
+  var timeStr = formatTime(time);
+  label.textContent = timeStr;
+  label.style.opacity = '';
+  
+  var datePart = isViewingToday() ? '' : ' (' + formatDateLabel(timelineDate) + ')';
+  document.getElementById('historyTimeLabel').style.display = 'block';
+  document.getElementById('historyTimeLabel').textContent = '\u05DE\u05E8\u05D0\u05D4 \u05D4\u05EA\u05E8\u05E2\u05D5\u05EA \u05DE\u05E9\u05E2\u05D4 ' + timeStr + datePart;
+  
+  reconstructStateAt(time);
+  
+  // Sync event list scroll
+  if (selectedLocation && !_scrollSyncLock) {
+    syncScrollToTime(time);
+  }
+}
+
+
+    function seekTo(time) {
+      time = clampTime(time);
+      slider.value = Math.min(sliderFromTime(time), 999);
+      enterHistoryMode(time);
+      if (shouldAutoZoomToEvents() && !selectedLocation) maybeZoomToEvent();
+    }
+
+    // --- Slider input ---
+    slider.addEventListener('input', function() {
+      stopPlay();
+      var time = clampTime(timeFromSlider(parseInt(slider.value)));
+      slider.value = sliderFromTime(time);
+      enterHistoryMode(time);
+      if (shouldAutoZoomToEvents() && !selectedLocation) maybeZoomToEvent();
+    });
+
+    // --- Timeline bands (show duration of active alerts) ---
+    var STATE_PRIORITY = { red: 4, brown: 3, purple: 2, yellow: 1, green: 0 };
+    var computedBands = []; // [{start, end, state}] - visual tick bands
+    var eventPeaks = []; // [timestamp] — last non-green before each all-clear wave
+    var eventPeakSizes = []; // [number] — unique location count for each peak
+    var eventStarts = []; // [timestamp] — first non-green of each event group
+    var eventGroupLocs = []; // [Set] — location sets for each event group
+
+    function computeEventPeaks() {
+      eventPeaks = [];
+      eventPeakSizes = [];
+      eventStarts = [];
+      eventGroupLocs = [];
+      var lastNonGreenTime = null;
+      var firstNonGreenTime = null;
+      var prevWasGreen = false;
+      var groupLocs = new Set();
+      for (var i = 0; i < extendedHistory.length; i++) {
+        var e = extendedHistory[i];
+        if (e.state !== 'green') {
+          if (prevWasGreen || firstNonGreenTime === null) firstNonGreenTime = e.alertDate;
+          prevWasGreen = false;
+          lastNonGreenTime = e.alertDate;
+          groupLocs.add(e.location);
+        } else {
+          if (!prevWasGreen && lastNonGreenTime !== null) {
+            eventPeaks.push(lastNonGreenTime);
+            eventPeakSizes.push(groupLocs.size);
+            eventStarts.push(firstNonGreenTime);
+            eventGroupLocs.push(groupLocs);
+          }
+          prevWasGreen = true;
+          groupLocs = new Set();
+        }
+      }
+      // Ongoing event: last entry was non-green
+      if (!prevWasGreen && lastNonGreenTime !== null) {
+        eventPeaks.push(lastNonGreenTime);
+        eventPeakSizes.push(groupLocs.size);
+        eventStarts.push(firstNonGreenTime);
+        eventGroupLocs.push(groupLocs);
+      }
+    }
+
+    function boundsForEvent(idx) {
+      var locs = eventGroupLocs[idx];
+      if (!locs) return null;
+      var bounds = null;
+      locs.forEach(function(loc) {
+        var feature = featureMap[loc];
+        if (!feature) return;
+        var b = featureBounds(feature);
+        if (!bounds) bounds = b;
+        else bounds.extend(b);
+      });
+      return bounds;
+    }
+
+
+    function renderTicks() {
+      ticksEl.innerHTML = '';
+      computedBands = [];
+      computeEventPeaks();
+      if (extendedHistory.length === 0) return;
+      var range = timelineMax - timelineMin;
+      if (range <= 0) return;
+
+      // Walk events, track per-location active state, emit bands
+      var locStates = {}; // location -> {state, since}
+      var bands = [];     // [{start, end, state}]
+      var curState = null;
+      var curStart = 0;
+
+      function dominantState() {
+        var best = null, bestP = -1;
+        for (var loc in locStates) {
+          var p = STATE_PRIORITY[locStates[loc].state] || 0;
+          if (p > bestP) { bestP = p; best = locStates[loc].state; }
+        }
+        return best;
+      }
+
+      for (var i = 0; i < extendedHistory.length; i++) {
+        var e = extendedHistory[i];
+        // Expire stale entries — if expiry causes a state drop, close the current band.
+        var maxExpiry = 0, anyExpired = false;
+        for (var loc in locStates) {
+          if (e.alertDate - locStates[loc].since >= ALERT_MAX_AGE_MS) {
+            var t = locStates[loc].since + ALERT_MAX_AGE_MS;
+            if (t > maxExpiry) maxExpiry = t;
+            delete locStates[loc];
+            anyExpired = true;
+          }
+        }
+        if (anyExpired) {
+          var domAfterExpiry = dominantState();
+          if (domAfterExpiry !== curState) {
+            if (curState) bands.push({ start: curStart, end: maxExpiry, state: curState });
+            curState = domAfterExpiry;
+            curStart = maxExpiry;
+          }
+        }
+        if (e.state === 'green') {
+          delete locStates[e.location];
+        } else {
+          locStates[e.location] = { state: e.state, since: e.alertDate };
+        }
+        var newDom = dominantState();
+        if (newDom !== curState) {
+          if (curState) {
+            bands.push({ start: curStart, end: e.alertDate, state: curState });
+          }
+          curState = newDom;
+          curStart = e.alertDate;
+        }
+      }
+      // Close final band, capped at staleness limit
+      if (curState) {
+        // Band ends at the latest location expiry, capped by timelineMax
+        var latestExpiry = 0;
+        for (var loc in locStates) {
+          var exp = locStates[loc].since + ALERT_MAX_AGE_MS;
+          if (exp > latestExpiry) latestExpiry = exp;
+        }
+        var bandCap = isViewingToday() ? Math.min(timelineMax, Date.now()) : timelineMax;
+        bands.push({ start: curStart, end: Math.min(latestExpiry, bandCap), state: curState });
+      }
+
+      computedBands = bands;
+
+      // Render bands as spans
+      for (var j = 0; j < bands.length; j++) {
+        var b = bands[j];
+        var leftPct = ((b.start - timelineMin) / range) * 100;
+        var widthPct = ((b.end - b.start) / range) * 100;
+        if (widthPct < 0.1) widthPct = 0.1; // min visible width
+        var span = document.createElement('span');
+        span.style.left = leftPct + '%';
+        span.style.width = widthPct + '%';
+        span.style.background = TICK_COLORS[b.state] || TICK_COLORS.red;
+        ticksEl.appendChild(span);
+      }
+
+      // Gray out future portion when viewing today
+      if (isViewingToday()) {
+        var now = Date.now();
+        if (now < timelineMax) {
+          var futureLeft = ((now - timelineMin) / range) * 100;
+          var futureSpan = document.createElement('span');
+          futureSpan.style.left = futureLeft + '%';
+          futureSpan.style.width = (100 - futureLeft) + '%';
+          futureSpan.style.background = 'repeating-linear-gradient(-45deg, transparent, transparent 2px, rgba(0,0,0,0.1) 2px, rgba(0,0,0,0.1) 4px)';
+          futureSpan.style.opacity = '1';
+          ticksEl.appendChild(futureSpan);
+        }
+      }
+    }
+
+    // --- Play / Pause ---
+    var userWantsPlaying = false;
+
+    function stopPlay() {
+      isPlaying = false;
+      userWantsPlaying = false;
+      playBtn.textContent = '▶';
+      if (playRAF) { cancelAnimationFrame(playRAF); playRAF = null; }
+      if (playFlyHandler) { map.off('moveend', playFlyHandler); playFlyHandler = null; }
+    }
+
+    var GAP_SKIP_MS = 300; // real-time ms before skipping a dead gap
+
+    function isInBand(time) {
+      for (var i = 0; i < computedBands.length; i++) {
+        if (time >= computedBands[i].start && time <= computedBands[i].end) return true;
+      }
+      return false;
+    }
+
+    function nextBandStart(time) {
+      for (var i = 0; i < computedBands.length; i++) {
+        if (computedBands[i].start > time) return computedBands[i].start;
+      }
+      return null;
+    }
+
+    function startPlay() {
+
+      isPlaying = true;
+      userWantsPlaying = true;
+      playBtn.textContent = '⏸';
+      var lastFrame = performance.now();
+      var gapEnterFrame = null;
+      var playEventIdx = -1;
+      if (parseInt(slider.value) >= sliderFromTime(isViewingToday() ? Math.min(timelineMax, Date.now()) : timelineMax)) {
+        var startTime = eventPeaks.length > 0 ? eventStarts[0] : timelineMin;
+        slider.value = sliderFromTime(startTime);
+        enterHistoryMode(startTime);
+      }
+
+      function findEventIdx(time) {
+        for (var i = 0; i < eventStarts.length; i++) {
+          var end = (i + 1 < eventStarts.length) ? eventStarts[i + 1] : timelineMax;
+          if (time >= eventStarts[i] && time < end) return i;
+        }
+        return -1;
+      }
+
+      function tick(now) {
+        if (!isPlaying) return;
+        var dt = now - lastFrame;
+        lastFrame = now;
+        var newTime = currentViewTime + dt * PLAY_SPEED;
+        var playEnd = isViewingToday() ? Math.min(timelineMax, Date.now()) : timelineMax;
+        if (newTime >= playEnd) {
+          if (eventPeaks.length > 0) {
+            seekTo(eventPeaks[0]);
+          }
+          stopPlay();
+          return;
+        }
+        if (!isInBand(newTime)) {
+          if (gapEnterFrame === null) gapEnterFrame = now;
+          if (now - gapEnterFrame >= GAP_SKIP_MS) {
+            var next = nextBandStart(newTime);
+            if (next !== null) {
+              newTime = next;
+              gapEnterFrame = null;
+            }
+          }
+        } else {
+          gapEnterFrame = null;
+        }
+        slider.value = Math.min(sliderFromTime(newTime), 999);
+        currentViewTime = newTime;
+        var timeStr = formatTime(newTime);
+        label.textContent = timeStr;
+        var datePart = isViewingToday() ? '' : ' (' + formatDateLabel(timelineDate) + ')';
+        document.getElementById('historyTimeLabel').textContent = '\u05DE\u05E8\u05D0\u05D4 \u05D4\u05EA\u05E8\u05E2\u05D5\u05EA \u05DE\u05E9\u05E2\u05D4 ' + timeStr + datePart;
+        reconstructStateAt(newTime);
+        // Sync event list scroll (throttled: only when event index changes)
+        if (selectedLocation && _locationEventList.length > 0) {
+          var evIdx = -1;
+          for (var ei = _locationEventList.length - 1; ei >= 0; ei--) {
+            if (_locationEventList[ei].alertDate <= newTime) { evIdx = ei; break; }
+          }
+          if (evIdx !== _currentEventIdx) {
+            syncScrollToTime(newTime);
+          }
+        }
+
+        // Auto-zoom: fly to event area when entering a new event group
+        var curIdx = findEventIdx(newTime);
+        if (curIdx !== playEventIdx) {
+          playEventIdx = curIdx;
+          var bounds = shouldAutoZoomToEvents() && !selectedLocation && curIdx >= 0 && getActiveEventBounds() ? boundsForEvent(curIdx) : null;
+          if (bounds) {
+            isZoomingProgrammatically = true;
+            isPlaying = false;
+            if (playRAF) { cancelAnimationFrame(playRAF); playRAF = null; }
+            if (playFlyHandler) map.off('moveend', playFlyHandler);
+            playFlyHandler = function() {
+              map.off('moveend', playFlyHandler);
+              playFlyHandler = null;
+              isZoomingProgrammatically = false;
+              if (userWantsPlaying) {
+                isPlaying = true;
+                lastFrame = performance.now();
+                playRAF = requestAnimationFrame(tick);
+              }
+            };
+            map.on('moveend', playFlyHandler);
+            map.fitBounds(bounds, { 
+              padding: getMapPadding(80), 
+              maxZoom: 10,
+              speed: 0.6,
+              curve: 1.1,
+              essential: true
+            });
+            return;          }
+        }
+
+        playRAF = requestAnimationFrame(tick);
+      }
+      playRAF = requestAnimationFrame(tick);
+    }
+
+    playBtn.addEventListener('click', function() {
+      if (userWantsPlaying) stopPlay(); else startPlay();
+    });
+
+    // --- Prev / Next event peak ---
+    prevBtn.addEventListener('click', function() {
+      stopPlay();
+      for (var i = eventPeaks.length - 1; i >= 0; i--) {
+        if (eventPeaks[i] < currentViewTime - 500) {
+          seekTo(eventPeaks[i]);
+          return;
+        }
+      }
+    });
+
+    nextBtn.addEventListener('click', function() {
+      stopPlay();
+      for (var i = 0; i < eventPeaks.length; i++) {
+        if (eventPeaks[i] > currentViewTime + 500) {
+          seekTo(eventPeaks[i]);
+          return;
+        }
+      }
+    });
+
+  }
+
+  // --- Init ---
+
+document.addEventListener('DOMContentLoaded', function() {
+      // Banner shows on every page load (per product decision); the close
+      // button hides it for the current session only, no persistence.
+      {
+          var banner = document.createElement('div');
+          
+          // 🚨 THE FIX: Give it the ID so our CSS can find it!
+          banner.id = 'beta-warning';
+          
+          // The frosted glass styling (Stripped of hardcoded bottom/left positioning)
+          banner.style.cssText = 'position:fixed; z-index:10000; display:flex; align-items:center; gap:12px; padding:10px 16px; border-radius:30px; direction:rtl; font-size:13px; font-weight:600; color:#333; width:max-content; max-width:90vw; text-align:center; background:rgba(255,255,255,0.75); backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px); border:1px solid rgba(255,255,255,0.5); box-shadow:0 8px 32px rgba(0,0,0,0.15);';
+          
+          // Auto-adapt to Dark Mode
+          if (document.body.classList.contains('dark')) {
+              banner.style.background = 'rgba(30, 32, 38, 0.75)';
+              banner.style.color = '#eee';
+              banner.style.borderColor = 'rgba(255, 255, 255, 0.1)';
+          }
+
+          // The Content
+          banner.innerHTML = `
+              <span style="font-size: 16px;">🧪</span>
+              <span>האפליקציה בגרסת בטא ואין להסתמך עליה ככלי רשמי בשום מקרה.</span>
+              <button id="beta-close" style="background:none;border:none;color:inherit;font-size:20px;cursor:pointer;opacity:0.6;padding:0;line-height:1;margin-right:10px;">&times;</button>
+          `;
+
+          // Inject it straight into the body
+          document.body.appendChild(banner);
+
+          // Close button logic
+          document.getElementById('beta-close').addEventListener('click', function() {
+              banner.style.opacity = '0';
+              setTimeout(function() { banner.remove(); }, 300);
+          });
+      }
+  })
+
+                            
+   // --- 1. Move helper functions OUTSIDE of init() ---
+function trackVisit() {
+    // Only send the track request if we haven't done it this session
+    if (!sessionStorage.getItem('oref_visited')) {
+        fetch(PROXY_BASE + '/api/analytics?action=track', { method: 'POST' })
+            .then(function() {
+                // Mark this browser tab as tracked
+                sessionStorage.setItem('oref_visited', 'true');
+            })
+            .catch(function(err) { console.error("Tracking failed", err); });
+    }
+}
+
+
+function fetchAnalytics() {
+    fetch(PROXY_BASE + '/api/analytics')
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+            console.log("📊 Analytics Data Received:", data);
+            
+            // 1. Update Menu
+            if (data.visitors_24h !== undefined) {
+                var val24 = parseInt(data.visitors_24h) || 0; // Safely handle null/NaN
+                document.getElementById('menu-visitors-count').textContent = val24.toLocaleString('he-IL');
+            }
+            
+            // 2. Update Status Box & UNHIDE IT
+            if (data.visitors_1h !== undefined) {
+                var val1 = parseInt(data.visitors_1h) || 0;
+                var statusVis = document.getElementById('statusVisitors');
+                statusVis.innerHTML = val1.toLocaleString('he-IL') + ' מחוברים כעת <span class="status-emoji">👥</span>';
+                
+                // 🚨 THE FIX: Make the element visible!
+                if (val1 > 0) {
+                    statusVis.style.display = 'inline-block'; 
+                } else {
+                    statusVis.style.display = 'none'; // Hide if 0
+                }
+            }
+        })
+        .catch(function(err) { console.error("Analytics fetch error:", err); });
+}
+
+// --- 2. The cleaned init() function ---
+function init() {
+    // Register the visit
+    trackVisit();
+    fetchAnalytics();
+    // Map Click Listener
+    map.getCanvasContainer().addEventListener('click', function(e) {
+        if (isStyleLoading) return;
+        var rect = map.getCanvas().getBoundingClientRect();
+        var point = [e.clientX - rect.left, e.clientY - rect.top];
+        var features = map.queryRenderedFeatures(point, { layers: ['alerts-hit'] });
+        if (features.length > 0) {
+            var name = features[0].properties.name;
+            if (selectedLocation === name) deselectLocation();
+            else openLocationPanel(name);
+        }
+    }, true);
+
+    menuOpen = false;
+    drivingModeFeatureEnabled = false;
+    document.body.classList.remove('has-overlay');
+
+   // Ensure the top-left status box syncs perfectly the millisecond the data layer changes
+document.addEventListener('app:stateChanged', function() {
+    if (typeof updateLiveStatus === 'function') {
+        updateLiveStatus();
+    }
+});
+
+    // 🚨 THE FIX: Load both the Polygons AND the Time-to-Shelter data simultaneously
+    Promise.all([
+        fetch('locations_polygons.json').then(function(r) { return r.json(); }),
+        fetch('cities.json').then(function(r) { return r.json(); }),
+    ])
+    .then(function(responses) {
+var data = responses[0]; 
+        var citiesData = responses[1];
+        cachedCitiesData = citiesData;
+        // Polygons may already have been indexed without the cities.json
+        // aliases (load order is not guaranteed); rebuild now that we have both.
+        if (Object.keys(featureMap).length) {
+            buildNameIndex(Object.keys(featureMap), citiesData);
+        }
+
+        // 🚨 THE FIX: Bulletproof data extraction
+        for (var i = 0; i < citiesData.length; i++) {
+            var city = citiesData[i];
+            
+            // Look for the name and time, regardless of how the repo formats it
+            var cityName = city.name || city.value || city.he;
+            var cityTime = city.time || city.countdown;
+            
+            if (cityName && cityTime) {
+                timeToShelterData[cityName] = cityTime;
+            }
+        }
+        console.log("⏱️ Loaded shelter times for " + Object.keys(timeToShelterData).length + " zones.");        Object.keys(favorites).forEach(function(name) { addFavoriteMarker(name, favorites[name]); });
+
+       // 🚨 THE FIX: Unlocked to work on desktop monitors too
+        document.getElementById('legend').addEventListener('click', function() {
+            this.classList.toggle('collapsed');
+        });
+       
+        initTimeline();
+
+        // Panel Wiring
+        document.getElementById('up-close-row').addEventListener('click', closeTimelinePanel);
+        document.getElementById('up-handle').addEventListener('click', closeTimelinePanel);
+        document.getElementById('up-location-close').addEventListener('click', function(e) { e.stopPropagation(); closeTimelinePanel(); });
+        document.getElementById('up-fav-star').addEventListener('click', function(e) { window._toggleFav(e); });
+        
+        document.getElementById('up-event-list').addEventListener('click', function(e) {
+            var row = e.target.closest('.up-event-row');
+            if (row) document.dispatchEvent(new CustomEvent('app:seekTo', { detail: { time: Number(row.getAttribute('data-ts')) } }));
+        });
+
+        // Scroll sync logic
+        document.getElementById('up-event-list').addEventListener('scroll', function() {
+            if (_scrollSyncLock || !selectedLocation || isPlaying) return;
+            _scrollSyncLock = true;
+            var listEl = this;
+            var rows = listEl.querySelectorAll('.up-event-row');
+            var targetY = listEl.scrollTop + listEl.clientHeight * 0.75;
+            var closestIdx = 0;
+            for (var i = 0; i < rows.length; i++) {
+                if (rows[i].offsetTop <= targetY) closestIdx = i;
+                else break;
+            }
+            if (rows[closestIdx]) {
+                var ts = Number(rows[closestIdx].getAttribute('data-ts'));
+                if (ts && ts !== currentViewTime) {
+                    document.dispatchEvent(new CustomEvent('app:seekTo', { detail: { time: ts } }));
+                    for (var j = 0; j < rows.length; j++) rows[j].classList.toggle('up-current', j === closestIdx);
+                    _currentEventIdx = closestIdx;
+                }
+            }
+            requestAnimationFrame(function() { _scrollSyncLock = false; });
+        });
+
+        buildPolygons(data, function() {
+            pollingStarted = true;
+            fetchLiveAlerts();
+            fetchHistory(function() {
+                initialized = true;
+                if (shouldAutoZoomToEvents() && !selectedLocation) maybeZoomToEvent();
+            });
+            setTimeout(function() { fetchExtendedHistory(function() { rebuildTimelineFn(); }); }, 800);
+            if ('ontouchstart' in window) setTimeout(showPolygonHint, 500);
+            if (document.visibilityState !== 'hidden') {
+                livePollId = setInterval(fetchLiveAlerts, LIVE_POLL_MS);
+                historyPollId = setInterval(fetchHistory, HISTORY_POLL_MS);
+                fadePollId = setInterval(fadeGreenMarkers, FADE_TICK_MS);
+            }
+        });
+        startHeartbeat();
+    }).catch(function(err) {
+        console.error('Failed to load geo data:', err);
+        setStatus('err', 'אירעה שגיאה בטעינת נתונים גאוגרפיים');
+    });
+}
+
+
+function trackInitialVisit() {
+    // This POST call includes the "?action=track" param to trigger the increment
+    fetch(PROXY_BASE + '/api/analytics?action=track', { method: 'POST' })
+        .then(function() {
+            console.log("Visit tracked.");
+        });
+}
+
+function toggleTheme() {
+    isStyleLoading = true; // Block fetches and clicks
+    
+    // Switch the style
+    map.setStyle('new-style-url');
+    
+    // Unblock after the style settles
+    map.once('idle', function() {
+        isStyleLoading = false; 
+    });
+}
+
+   // --- CENTRAL POLL ORCHESTRATOR ---
+var heartbeatInterval = null;
+
+function startHeartbeat() {
+    // If there is already an interval running, stop it first
+    if (heartbeatInterval) clearInterval(heartbeatInterval);
+    
+    // Check every 5 seconds
+    heartbeatInterval = setInterval(function() {
+        // 🚨 THE FIX: Do not let the heartbeat resurrect pollers while the tab is hidden!
+        if (document.visibilityState === 'hidden') return;
+
+        // Only run if map is ready and not currently mid-theme-switch
+        if (typeof mapLoaded !== 'undefined' && mapLoaded && !isStyleLoading) {
+            
+            // If live alerts poller is dead, restart it
+            if (!livePollId) {
+                console.warn("Heartbeat: Live Poller dead, restarting...");
+                fetchLiveAlerts();
+                livePollId = setInterval(fetchLiveAlerts, LIVE_POLL_MS);
+            }
+            
+            // If history poller is dead, restart it
+            if (typeof isViewingToday === 'function' && isViewingToday() && !historyPollId) {
+                console.warn("Heartbeat: History Poller dead, restarting...");
+                fetchHistory();
+                historyPollId = setInterval(fetchHistory, HISTORY_POLL_MS);
+            }
+        }
+    }, 5000); 
+}
+   
+   // --- About control ---
+  document.getElementById('status').addEventListener('click', function() {
+    var detail = document.getElementById('errorDetail');
+    var dot = document.getElementById('statusDot');
+    if (!dot.classList.contains('indicator-err')) return;
+    if (detail.style.display === 'block') {
+      detail.style.display = 'none';
+    } else {
+      detail.textContent = (lastErrorMsg || 'Unknown error') + (lastCfColo ? ' (CF edge: ' + lastCfColo + ')' : '');
+      detail.style.display = 'block';
+    }
+  });
+  document.addEventListener('click', function(e) {
+    var detail = document.getElementById('errorDetail');
+    var status = document.getElementById('status');
+    if (detail.style.display === 'block' && !status.contains(e.target) && e.target !== detail) {
+      detail.style.display = 'none';
+    }
+  });
+
+  // Show tap hint for mobile users on first visit
+  if ('ontouchstart' in window && !localStorage.getItem('tapHintShown')) {
+    var hint = document.getElementById('tap-hint');
+    hint.style.display = 'block';
+    localStorage.setItem('tapHintShown', '1');
+    hint.addEventListener('animationend', function() { hint.remove(); });
+  }
+
+  // --- Sound control (in menu) ---
+  var soundSearch = document.getElementById('sound-search');
+  var soundResults = document.getElementById('sound-results');
+
+  var svgSoundOff = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>';
+  var svgSoundOn = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>';
+  function updateMenuSoundUI() {
+    var icon = soundMuted ? svgSoundOff : svgSoundOn;
+    var text = soundMuted ? 'מצב שקט' : (soundLocation === 'all' ? 'צליל מופעל' : soundLocation);
+    menuSoundRow.querySelector('.menu-item-icon').innerHTML = icon;
+    menuSoundRow.querySelector('.menu-item-label').textContent = text;
+    menuSoundItem.classList.toggle('active', !soundMuted);
+  }
+  updateMenuSoundUI();
+
+  function openSoundSubPanel() {
+    menuSoundItem.classList.add('sound-open');
+    soundSubPanelOpen = true;
+    soundSearch.value = '';
+    soundResults.innerHTML = '';
+    soundSearch.focus();
+  }
+
+  function selectSoundLocation(loc) {
+    soundLocation = loc;
+    soundMuted = false;
+    updateMenuSoundUI();
+    try {
+      localStorage.setItem('oref-sound-muted', 'false');
+      localStorage.setItem('oref-sound-location', loc);
+    } catch(e) {}
+    getAudioContext();
+    closeSoundSubPanel();
+  }
+
+  menuSoundRow.addEventListener('click', function() {
+    if (soundSubPanelOpen) {
+      closeSoundSubPanel();
+    } else if (soundMuted) {
+      openSoundSubPanel();
+    } else {
+      soundMuted = true;
+      updateMenuSoundUI();
+      try { localStorage.setItem('oref-sound-muted', 'true'); } catch(e) {}
+    }
+  });
+
+  document.getElementById('sound-all-btn').addEventListener('click', function() {
+    selectSoundLocation('all');
+  });
+
+  soundSearch.addEventListener('input', function() {
+    var q = soundSearch.value.trim();
+    if (q.length < 2) {
+      soundResults.innerHTML = '';
+      return;
+    }
+    var matches = Object.keys(featureMap).filter(function(name) {
+      return name.includes(q) || (window.__i18nMatchName ? window.__i18nMatchName(name, q) : false);
+    }).slice(0, 20);
+
+    soundResults.innerHTML = matches.map(function(m) {
+      return '<div class="location-item" data-name="' + m + '">' + m + '</div>';
+    }).join('');
+  });
+
+  soundResults.addEventListener('click', function(e) {
+    var item = e.target.closest('.location-item');
+    if (item) {
+      selectSoundLocation(item.getAttribute('data-name'));
+    }
+  });
+
+  // --- Location search (in menu) ---
+  searchInput.addEventListener('input', function() {
+    var q = searchInput.value.trim();
+    if (q.length < 2) {
+      searchResults.innerHTML = '';
+      return;
+    }
+    var matches = Object.keys(featureMap).filter(function(name) {
+      return name.includes(q) || (window.__i18nMatchName ? window.__i18nMatchName(name, q) : false);
+    }).slice(0, 20);
+
+    searchResults.innerHTML = matches.map(function(m) {
+      return '<div class="location-item" data-name="' + m + '">' + m + '</div>';
+    }).join('');
+  });
+
+  searchResults.addEventListener('click', function(e) {
+    var item = e.target.closest('.location-item');
+    if (!item) return;
+    var name = item.getAttribute('data-name');
+    var feature = featureMap[name];
+    if (!feature) return;
+
+    closeMenu();
+    popPanelHistory();
+
+    // Open the panel *before* moving the camera. getMapPadding() measures the
+    // live element, so opening it afterwards meant the city was centred in the
+    // full viewport and the panel then dropped on top of it. Setting the
+    // programmatic flag first also suppresses nudgeIntoView(), which would
+    // otherwise pan once here and again on fitBounds.
+    isZoomingProgrammatically = true;
+    openLocationPanel(name);
+
+var bounds = featureBounds(feature);
+    map.fitBounds(bounds, { 
+      padding: getMapPadding(80), 
+      maxZoom: 12,
+      speed: 0.8,
+      curve: 1.2,
+      essential: true
+    });
+
+    map.once('moveend', function() {
+       isZoomingProgrammatically = false;
+    });
+  });
+
+  // --- Mobile back button closes panels ---
+  window.addEventListener('popstate', function() {
+    panelHistoryPushed = false;
+    closeMenu();
+    closeTimelinePanel();
+  });
+
+  // --- Click outside to close menu ---
+  document.addEventListener('click', function(e) {
+    if (menuOpen && !menuPanel.contains(e.target) && !menuBtn.contains(e.target)) {
+      closeMenu();
+      popPanelHistory();
+    }
+  });
+
+  // --- Wake lock: prevent screen from turning off ---
+  var _wakeLock = null;
+  var _wakeLockEnabled = true;
+  try { _wakeLockEnabled = localStorage.getItem('oref-wake-lock') !== 'disabled'; } catch(e) {}
+  var _menuWakeLock = document.getElementById('menu-wakelock');
+  var _isMobileDevice = (navigator.userAgentData ? navigator.userAgentData.mobile : window.matchMedia('(pointer: coarse) and (hover: none)').matches);
+  if (!('wakeLock' in navigator)) {
+    if (_menuWakeLock) _menuWakeLock.style.display = 'none';
+  } else if (_menuWakeLock) {
+    if (_isMobileDevice) {
+      var _iconEl = document.getElementById('menu-wakelock-icon');
+      if (_iconEl) _iconEl.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2"/><circle cx="12" cy="18" r="1"/></svg>';
+    }
+    if (_wakeLockEnabled) _menuWakeLock.classList.add('active');
+    _menuWakeLock.querySelector('.menu-item-row').addEventListener('click', function() {
+      if (drivingModeFeatureEnabled) {
+        showToast('המסך לא יכבה במצב נהיגה');
+        return;
+      }
+      _wakeLockEnabled = !_wakeLockEnabled;
+      try { localStorage.setItem('oref-wake-lock', _wakeLockEnabled ? 'enabled' : 'disabled'); } catch(e) {}
+      _menuWakeLock.classList.toggle('active', _wakeLockEnabled);
+      if (_wakeLockEnabled) {
+        _acquireWakeLock();
+      } else if (_wakeLock) {
+        _wakeLock.release().catch(function() {});
+        _wakeLock = null;
+      }
+    });
+  }
+  function _acquireWakeLock() {
+    if (!('wakeLock' in navigator) || (!_wakeLockEnabled && !drivingModeFeatureEnabled)) return;
+    if (_wakeLock && !_wakeLock.released) return;
+    navigator.wakeLock.request('screen').then(function(wl) { _wakeLock = wl; }).catch(function() {});
+  }
+  _acquireWakeLock();
+
+ // --- Pause polling when tab is hidden; resume when visible ---
+  document.addEventListener('visibilitychange', function() {
+    if (document.visibilityState === 'hidden') {
+      pausePolling();
+      return;
+    }
+    // visible
+    _acquireWakeLock();
+    if (!pollingStarted) return; // page still initializing, nothing to resume
+    if (livePollId !== null) return; // polling already running (wasn't paused)
+    // If hidden for >30s, reload instead of resuming (existing mobile behavior)
+    try {
+      var lastPoll = Number(sessionStorage.getItem('oref-last-poll')) || 0;
+      if (lastPoll > 0 && Date.now() - lastPoll >= 30000) {
+        var lastReload = Number(sessionStorage.getItem('oref-reload-ts')) || 0;
+        if (Date.now() - lastReload >= 60000) {
+          sessionStorage.setItem('oref-reload-ts', String(Date.now()));
+          location.reload();
+          return;
+        }
+      }
+    } catch(e) {}
+    resumePolling();
+  });
+  
+  // --- Idle mode: hide buttons after inactivity ---
+  var IDLE_MS = 45000;
+  var _idleTimer = null;
+  function _enterIdle() {
+    if (menuOpen || unifiedPanelState !== 'closed') {
+      _resetIdle(); return;
+    }
+    document.body.classList.add('idle');
+  }
+  function _resetIdle() {
+    document.body.classList.remove('idle');
+    clearTimeout(_idleTimer);
+    _idleTimer = setTimeout(_enterIdle, IDLE_MS);
+  }
+  ['mousemove','mousedown','keydown','wheel','scroll','touchstart','touchmove']
+    .forEach(function(e) { document.addEventListener(e, _resetIdle, {passive:true}); });
+  _resetIdle();
+
+  // --- Menu: Language ---
+  var langSelect = document.getElementById('lang-select');
+  langSelect.value = currentLang;
+  langSelect.addEventListener('change', function() {
+    try { localStorage.setItem('oref-map-lang', langSelect.value); } catch(e) {}
+    location.reload();
+  });
+
+  // --- Menu: About ---
+  var menuAbout = document.getElementById('menu-about');
+  if (menuAbout) menuAbout.addEventListener('click', function() { window.location.href = 'about.html'; });
+
+   
+   
+  // --- Menu: Theme ---
+  var themeSelect = document.getElementById('theme-select');
+  var themeIcon = document.getElementById('menu-theme-icon');
+  themeSelect.value = currentTheme;
+  var THEME_ICONS = {
+    light: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>',
+    dark: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>',
+    auto: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 0 20V2z" fill="currentColor"/></svg>'
+  };
+  // Show icon matching the resolved state (sun if light, moon if dark)
+  themeIcon.innerHTML = THEME_ICONS[isDarkActive ? 'dark' : 'light'];
+  // But if auto mode, show the auto icon
+  if (currentTheme === 'auto') themeIcon.innerHTML = THEME_ICONS.auto;
+  themeSelect.addEventListener('change', function() {
+    try { localStorage.setItem('oref-theme', themeSelect.value); } catch(e) {}
+    location.reload();
+  });
+  // Auto-theme: reload on system preference change
+  try {
+    var colorSchemeMq = window.matchMedia('(prefers-color-scheme: dark)');
+    var onColorSchemeChange = function() {
+      if (currentTheme === 'auto') location.reload();
+    };
+    if (typeof colorSchemeMq.addEventListener === 'function') {
+      colorSchemeMq.addEventListener('change', onColorSchemeChange);
+    } else if (typeof colorSchemeMq.addListener === 'function') {
+      colorSchemeMq.addListener(onColorSchemeChange);
+    }
+  } catch(e) {}
+
+  // --- Menu: Share ---
+  var isIos = /iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+              (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  document.getElementById(isIos ? 'share-icon-ios' : 'share-icon-android').style.display = 'block';
+
+  if (navigator.share && ('ontouchstart' in window)) {
+    document.getElementById('menu-share').style.display = '';
+    document.getElementById('menu-share').querySelector('.menu-item-row').addEventListener('click', async function() {
+      closeMenu();
+      popPanelHistory();
+      try {
+        await navigator.share({
+          title: 'מפת התגוננות',
+          text: 'התרעות פיקוד העורף בזמן אמת',
+          url: 'https://redmap.me'
+        });
+      } catch (e) {
+        if (e.name !== 'AbortError') console.error('Share failed:', e);
+      }
+    });
+  }
+
+// --- Global Helper Functions ---
+
+// Neutral city outlines.
+//
+// This layer is the ONLY thing marking a city when nothing is happening:
+// unalerted polygons sit at fill-opacity 0.01, so without a border a quiet map
+// shows no city boundaries at all. It used to be a 0.4px dashed line at 0.25
+// opacity, which at that size reads as noise rather than structure.
+//
+// The colour is grey on purpose and must stay grey. Every other colour on this
+// map belongs to the alert vocabulary (red rockets, purple aircraft, brown
+// infiltration, yellow pre-alert), so an outline tinted toward any hue would
+// announce a state the city does not have.
+//
+// The outline also does not react to alerts - it stays the same constant grey
+// under a lit polygon. The alert colour arrives on top via alerts-glow and
+// alerts-stroke, both of which are added after this layer and so paint over it.
+//
+// Width and opacity are zoom-interpolated because roughly 1,450 polygons share
+// this one layer. A width that reads cleanly when zoomed into a city turns the
+// whole country into grey hatching at DEFAULT_ZOOM (7.2), where those polygons
+// are only a few pixels apart - so the country view stays a hairline and the
+// line firms up only once there is open space between borders.
+function alertsBorderPaint() {
+    // Recomputed on every call rather than cached: addAlertLayers() re-runs from
+    // the style.load handler, which is exactly the moment the theme has flipped.
+    //
+    // isDarkActive is in scope here (verified, not assumed). The typeof guard is
+    // for the future, not the present: a ReferenceError thrown here would abort
+    // addAlertLayers() partway and leave the map with no alert layers at all. A
+    // wrong-but-grey outline is a cosmetic bug; a missing alerts-fill is a blank
+    // map during an attack. Degrade, never throw.
+    var dark = (typeof isDarkActive !== 'undefined') && isDarkActive;
+
+    return {
+        // Light grey, and deliberately lighter than it "should" be: the perceived
+        // weight of this layer comes from its density, not from any one line.
+        // Dark mode lifts rather than darkens, for contrast against the basemap.
+        'line-color': dark ? '#8f9aa8' : '#9ca3af',
+        // Tuned down from a first pass that read as bold. Watch the product of
+        // width x opacity, not either alone - that is the ink on screen. The
+        // original dashed [2,2] line drew only half its length, so its true
+        // weight was 0.4 x 0.25 x 0.5 = 0.05, not 0.10; solid lines here are
+        // worth roughly double their arithmetic.
+        // Country view (z7.2) now lands near 0.11 - about 2x the old line rather
+        // than 5x, still continuous instead of speckled.
+        'line-width':   ['interpolate', ['linear'], ['zoom'], 6, 0.35, 8, 0.6,  11, 0.9],
+        'line-opacity': ['interpolate', ['linear'], ['zoom'], 6, 0.15, 8, 0.26, 11, 0.4]
+    };
+}
+
+function addAlertLayers() {
+    if (map.getSource('alerts-source')) return; 
+
+    map.addSource('alerts-source', { type: 'geojson', data: polygonsGeoJSON });
+
+    // 1. Fill
+    map.addLayer({
+        id: 'alerts-fill', type: 'fill', source: 'alerts-source',
+        paint: {
+            'fill-color': ['coalesce', ['feature-state', 'fillColor'], '#888888'],
+            'fill-opacity': ['coalesce', ['feature-state', 'fillOpacity'], 0.01]
+        }
+    });
+
+    // 2. Borders
+    map.addLayer({
+        id: 'alerts-borders', type: 'line', source: 'alerts-source',
+        paint: alertsBorderPaint()
+    });
+
+    // 3. Glow and Stroke
+    map.addLayer({ id: 'alerts-glow', type: 'line', source: 'alerts-source', paint: { 'line-color': ['coalesce', ['feature-state', 'lineColor'], 'transparent'], 'line-opacity': ['coalesce', ['feature-state', 'lineOpacity'], 0], 'line-width': 3, 'line-blur': 3 } });
+    map.addLayer({ id: 'alerts-stroke', type: 'line', source: 'alerts-source', paint: { 'line-color': ['coalesce', ['feature-state', 'lineColor'], '#aaaaaa'], 'line-opacity': ['coalesce', ['feature-state', 'lineOpacity'], 0], 'line-width': 1.5 } });
+
+    // 4. 🚨 HIT LAYER: Must be last to be on top!
+   if (map.getLayer('alerts-hit')) map.removeLayer('alerts-hit');
+    
+    map.addLayer({ 
+        id: 'alerts-hit', 
+        type: 'fill', 
+        source: 'alerts-source', 
+        paint: { 'fill-color': 'transparent' }
+    });
+    
+    // Move it to the very top of the stack
+    map.moveLayer('alerts-hit'); 
+}
+
+function reSyncAlertStates() {
+    console.log("DEBUG: Re-syncing state for", Object.keys(locationStates).length, "active locations.");
+    
+    // Clear previous state just in case
+    for (var name in locationStates) {
+        liveRestyle(name);
+    }
+}
+
+function rebuildMapButtons() {
+    var navGroup = document.querySelector('.maplibregl-ctrl-group');
+    if (!navGroup) return;
+
+    var existingReset = document.getElementById('reset-btn');
+    var existingTheme = document.getElementById('theme-btn');
+    if (existingReset) existingReset.remove();
+    if (existingTheme) existingTheme.remove();
+
+    var resetBtn = document.createElement('button');
+    resetBtn.id = 'reset-btn';
+    resetBtn.type = 'button';
+    resetBtn.title = 'איפוס תצוגה';
+    resetBtn.innerHTML = '<span class="maplibregl-ctrl-icon" style="display:flex; align-items:center; justify-content:center;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#333" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg></span>';
+    resetBtn.addEventListener('click', function() {
+        map.flyTo({ center: [DEFAULT_CENTER[1], DEFAULT_CENTER[0]], zoom: DEFAULT_ZOOM, bearing: 0, pitch: 0 });
+    });
+/*
+    var themeBtn = document.createElement('button');
+    themeBtn.id = 'theme-btn';
+    themeBtn.type = 'button';
+    themeBtn.title = 'מצב לילה/יום';
+    themeBtn.innerHTML = '<span class="maplibregl-ctrl-icon" style="display:flex; align-items:center; justify-content:center; font-size:16px;">' + (document.body.classList.contains('dark') ? '☀️' : '🌙') + '</span>';
+    
+    themeBtn.addEventListener('click', function() {
+        isDarkActive = !document.body.classList.contains('dark');
+        document.body.classList.toggle('dark', isDarkActive);
+        map.setStyle(buildMapStyle(isDarkActive, currentLang));
+        themeBtn.innerHTML = '<span class="maplibregl-ctrl-icon" style="display:flex; align-items:center; justify-content:center; font-size:16px;">' + (isDarkActive ? '☀️' : '🌙') + '</span>';
+        try { localStorage.setItem('oref-theme', isDarkActive ? 'dark' : 'light'); } catch(e) {}
+    });*/
+
+    navGroup.appendChild(resetBtn);
+    /*navGroup.appendChild(themeBtn);*/
+
+    // The menu button is anchored to this group's right edge and to the − button's
+    // centre, and the group's contents just changed.
+    positionMenuButton();
+}
+
+// Park the menu button immediately to the right of the map controls, vertically
+// centred on the zoom-out (−) button.
+//
+// Centre on the − button, not on the control group as a whole: the group is
+// assembled at runtime (NavigationControl's two buttons plus whatever
+// rebuildMapButtons() appends — the theme button is currently commented out, so
+// the count is 3 today and 4 the moment someone uncomments it). The group's
+// centre therefore moves whenever that count changes, while the − button is the
+// second row of the stack and stays put. Measuring beats hard-coding for the same
+// reason: a literal offset would silently drift.
+function positionMenuButton() {
+    var ctrls = document.querySelector('.maplibregl-ctrl-top-left');
+    var btn = document.getElementById('menu-btn');
+    if (!ctrls || !btn) return;
+
+    var r = ctrls.getBoundingClientRect();
+    // Before the controls render this is a zero-size box; bailing leaves the CSS
+    // fallbacks in place rather than parking the button in the viewport corner.
+    // Width matters now as well as height — the horizontal offset depends on it.
+    if (!r.height || !r.width) return;
+
+    var GAP = 10;
+    var h = btn.offsetHeight || 40;
+
+    // Fall back to the group's own centre if there's no zoom-out button to find,
+    // e.g. if NavigationControl is ever constructed with showZoom: false.
+    var zoomOut = ctrls.querySelector('.maplibregl-ctrl-zoom-out');
+    var anchor = (zoomOut && zoomOut.getBoundingClientRect().height) ? zoomOut.getBoundingClientRect() : r;
+
+    var left = Math.round(r.right + GAP);
+    var top = Math.round(anchor.top + (anchor.height / 2) - (h / 2));
+
+    var root = document.documentElement;
+    root.style.setProperty('--menu-btn-left', left + 'px');
+    root.style.setProperty('--menu-btn-top', top + 'px');
+    root.style.setProperty('--menu-panel-left', left + 'px');
+    root.style.setProperty('--menu-panel-top', (top + h + 8) + 'px');
+}
+
+// Re-measure whenever the control stack changes size. ResizeObserver catches
+// button add/remove; resize + orientationchange catch the mobile breakpoint,
+// which moves the whole rail.
+function watchMenuButtonPosition() {
+    positionMenuButton();
+    var ctrls = document.querySelector('.maplibregl-ctrl-top-left');
+    if (ctrls && typeof ResizeObserver !== 'undefined') {
+        try { new ResizeObserver(positionMenuButton).observe(ctrls); } catch (e) {}
+    }
+    window.addEventListener('resize', positionMenuButton);
+    window.addEventListener('orientationchange', positionMenuButton);
+}
+
+// --- CENTRALIZED INTERACTION MANAGER ---
+function setupInteractionHandler() {
+    // 1. Remove ANY existing listener to prevent stacking/conflicts
+    map.off('click', 'alerts-hit');
+
+    // 2. Add the clean, single source of truth listener
+    map.on('click', 'alerts-hit', function(e) {
+        // Log for debugging visibility
+        console.log("CLICK DETECTED ON:", e.features[0].properties.name);
+
+        // State guards (Optional: remove or adjust if you keep seeing blocks)
+        if (menuOpen || drivingModeFeatureEnabled) {
+            console.warn("Click blocked by UI state");
+            return;
+        }
+
+        var name = e.features[0].properties.name;
+        if (selectedLocation === name) {
+            deselectLocation();
+        } else {
+            openLocationPanel(name);
+        }
+    });
+
+    // Cursor behavior (doesn't need to be off'd, just set)
+    map.on('mouseenter', 'alerts-hit', function() { 
+        if (!menuOpen) map.getCanvas().style.cursor = 'pointer'; 
+    });
+    map.on('mouseleave', 'alerts-hit', function() { 
+        map.getCanvas().style.cursor = ''; 
+    });
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    init();
+    _extInitDone = true;
+    _maybeDispatchReady();
+});
+</script>
+
+    <div id="dev-tools-container" style="position: fixed; bottom: 24px; left: 24px; z-index: 9999; display: none; flex-direction: column-reverse; align-items: flex-start; gap: 10px; direction: rtl;">
+    <button id="dev-toggle-btn" style="width: 44px; height: 44px; border-radius: 50%; background: #374151; color: white; border: none; cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; font-size: 20px; transition: transform 0.2s ease, background 0.2s ease; user-select: none;">
+    🛠️
+  </button>
+
+  <div id="dev-buttons" style="display: none; flex-direction: column; gap: 8px; background: rgba(255,255,255,0.95); padding: 12px; border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.2); border: 1px solid #e5e7eb;">
+    <button id="dev-test-rocket-btn" style="padding: 10px 16px; background: #ef4444; color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 13px; width: 100%; box-shadow: 0 2px 4px rgba(239,68,68,0.3);">
+      🚨 טסט טילים (Red)
+    </button>
+    <button id="dev-test-terrorist-btn" style="padding: 10px 16px; background: #8b4513; color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 13px; width: 100%; box-shadow: 0 2px 4px rgba(139,69,19,0.3);">
+      🥷 טסט מחבלים (Brown)
+    </button>
+    <button id="dev-test-drone-btn" style="padding: 10px 16px; background: #9333ea; color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 13px; width: 100%; box-shadow: 0 2px 4px rgba(147,51,234,0.3);">
+      🚁 טסט כטב״מ (Purple)
+    </button>
+    <button id="dev-test-barrage-btn" style="padding: 10px 16px; background: #000000; color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 13px; width: 100%; box-shadow: 0 2px 4px rgba(0,0,0,0.4);">
+      💥 טסט מטח כבד (Chaos)
+    </button>
+    <button id="dev-test-lebanon-btn" style="padding: 10px 16px; background: #eab308; color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 13px; width: 100%; box-shadow: 0 2px 4px rgba(234,179,8,0.3);">
+      ⚠️ טסט איום מלבנון (Yellow)
+    </button>
+    <button id="dev-test-hazmat-btn" style="padding: 10px 16px; background: #009999; color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 13px; width: 100%; box-shadow: 0 2px 4px rgba(0,153,153,0.3);">
+      🧪 טסט חומ״ס (Teal)
+    </button>
+    <button id="dev-test-earthquake-btn" style="padding: 10px 16px; background: #ff8800; color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 13px; width: 100%; box-shadow: 0 2px 4px rgba(255,136,0,0.3);">
+      🌍 טסט רעידת אדמה (Orange)
+    </button>
+    <button id="dev-test-allclear-btn" style="padding: 10px 16px; background: #22c55e; color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 13px; width: 100%; box-shadow: 0 2px 4px rgba(34,197,94,0.3);">
+      ✅ טסט סיום אירוע (All Clear)
+    </button>
+    <button onclick="location.reload()" style="padding: 10px 16px; background: #6b7280; color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 13px; width: 100%; box-shadow: 0 2px 4px rgba(107,114,128,0.3);">
+      🔄 נקה מפה
+    </button>
+  </div>
+</div>
+
+<script>
+  // 1. Toggle Menu Logic
+  var devToggleBtn = document.getElementById('dev-toggle-btn');
+  var devButtons = document.getElementById('dev-buttons');
+  
+  devToggleBtn.addEventListener('click', function() {
+      if (devButtons.style.display === 'none') {
+          devButtons.style.display = 'flex';
+          devToggleBtn.style.transform = 'rotate(45deg)';
+          devToggleBtn.style.background = '#4b5563';
+      } else {
+          devButtons.style.display = 'none';
+          devToggleBtn.style.transform = 'rotate(0deg)';
+          devToggleBtn.style.background = '#374151';
+      }
+  });
+  // 1.5 Master Show/Hide Logic from Hamburger Menu
+  var devToolsContainer = document.getElementById('dev-tools-container');
+  var devToolsMenuBtn = document.getElementById('dev-tools-toggle-btn');
+  var devToolsMenuWrapper = document.getElementById('menu-dev-tools');
+  
+  // Load saved preference
+  var devToolsEnabled = localStorage.getItem('oref-dev-tools') === 'true';
+  
+  function updateDevToolsState() {
+      if (devToolsEnabled) {
+          devToolsContainer.style.display = 'flex';
+          if (devToolsMenuWrapper) devToolsMenuWrapper.classList.add('active');
+      } else {
+          devToolsContainer.style.display = 'none';
+          if (devToolsMenuWrapper) devToolsMenuWrapper.classList.remove('active');
+          // Auto-collapse the popup menu if we hide the master button
+          devButtons.style.display = 'none';
+          devToggleBtn.style.transform = 'rotate(0deg)';
+          devToggleBtn.style.background = '#374151';
+      }
+  }
+  
+  // Run on load
+  updateDevToolsState();
+
+  // Listen for clicks in the hamburger menu
+  if (devToolsMenuBtn) {
+      devToolsMenuBtn.addEventListener('click', function(e) {
+          devToolsEnabled = !devToolsEnabled;
+          localStorage.setItem('oref-dev-tools', devToolsEnabled ? 'true' : 'false');
+          updateDevToolsState();
+      });
+  }
+
+  // 2. Helper to inject alerts safely
+  function triggerTestAlert(payload) {
+      if (window.injectAlert) {
+          window.injectAlert(payload);
+          if (typeof maybeZoomToEvent === 'function') {
+              setTimeout(maybeZoomToEvent, 100); 
+          }
+      } else {
+          console.error("injectAlert function not found.");
+      }
+  }
+
+  // 3. Rocket Test Button
+  document.getElementById('dev-test-rocket-btn').addEventListener('click', function() {
+      triggerTestAlert({
+          id: "TEST_" + Date.now(),
+          cat: "1",
+          title: "ירי רקטות וטילים",
+          data: ["תל אביב - מרכז", "ראש העין"],
+          desc: "היכנסו למרחב המוגן"
+      });
+  });
+
+  // 4. Drone Test Button
+  document.getElementById('dev-test-drone-btn').addEventListener('click', function() {
+      triggerTestAlert({
+          id: "TEST_" + Date.now(),
+          cat: "2",
+          title: "חדירת כלי טיס עוין", 
+          data: ["חיפה - כרמל ועיר תחתית", "קריית ביאליק"], 
+          desc: "היכנסו למרחב המוגן"
+      });
+  });
+
+  // 5. Terrorist Test Button
+  document.getElementById('dev-test-terrorist-btn').addEventListener('click', function() {
+      triggerTestAlert({
+          id: "TEST_" + Date.now(),
+          cat: "3",
+          title: "חדירת מחבלים", 
+          data: ["שדרות, איבים וניר עם", "נתיבות"], 
+          desc: "היכנסו מייד למבנה, נעלו את הדלתות וסגרו את החלונות"
+      });
+  });
+
+  // 6. Chaos Barrage Button
+  document.getElementById('dev-test-barrage-btn').addEventListener('click', function() {
+      triggerTestAlert({
+          id: "TEST_CHAOS_" + Date.now(),
+          cat: "1",
+          title: "ירי רקטות וטילים", 
+          data: [
+            "תל אביב - מרכז", "חיפה - כרמל ועיר תחתית", "ראש העין", 
+            "שדרות, איבים וניר עם", "נתיבות", "צפת - עיר", "אשדוד - יא, יב, טו, יז, מרינה", 
+            "פתח תקווה", "הרצליה - מרכז וגליל ים", "ירושלים - מרכז", "אילת", "קריית שמונה"
+          ], 
+          desc: "מטח כבד ארצי - היכנסו מייד למרחב המוגן"
+      });
+  });
+
+// 7. All Clear (Hazlash) Button
+  // Hazmat Test Button
+  document.getElementById('dev-test-hazmat-btn').addEventListener('click', function() {
+      triggerTestAlert({
+          id: "TEST_" + Date.now(),
+          cat: "6",
+          title: "חומרים מסוכנים - היכנסו למרחב המוגן",
+          data: ["אשדוד - איזור תעשייה צפוני"],
+          desc: "היכנסו למרחב המוגן"
+      });
+  });
+
+  // Earthquake Test Button
+  document.getElementById('dev-test-earthquake-btn').addEventListener('click', function() {
+      triggerTestAlert({
+          id: "TEST_" + Date.now(),
+          cat: "3",
+          title: "רעידת אדמה",
+          data: ["טבריה", "בית שאן"],
+          desc: "רעידת אדמה"
+      });
+  });
+
+  document.getElementById('dev-test-allclear-btn').addEventListener('click', function() {
+      // 1. Ask the engine which cities are currently active
+      var activeLocs = [];
+      if (window.printAlertAllLocations) {
+          activeLocs = window.printAlertAllLocations();
+      }
+
+      // 2. If the map is already quiet, do nothing
+      if (activeLocs.length === 0) {
+          if (window.AppState && window.AppState.showToast) {
+              window.AppState.showToast("אין התרעות פעילות (Map is already clear)");
+          }
+          return;
+      }
+
+      // 3. Inject a massive "Event Over" payload for all active cities
+      triggerTestAlert({
+          id: "TEST_CLEAR_" + Date.now(),
+          cat: "1",
+          title: "האירוע הסתיים", 
+          data: activeLocs, 
+          desc: "ניתן לצאת מהמרחב המוגן"
+      });
+  }); // <-- All Clear button properly closed here
+
+  // 8. Lebanon Pre-Alert Button
+  document.getElementById('dev-test-lebanon-btn').addEventListener('click', function() {
+      triggerTestAlert({
+          id: "TEST_LEBANON_" + Date.now(),
+          cat: "1",
+          title: "⚠ איום מלבנון - התקרבו למרחב מוגן", 
+          data: ["חיפה - כרמל ועיר תחתית", "תל אביב - מרכז"], 
+          desc: "היכנסו למרחב המוגן"
+      });
+  });
+</script>
+<script>
+
+function removeLocation(name) {
+    if (locationStates[name]) {
+        delete locationStates[name];
+    }
+    delete locationThreats[name];
+    // Also drop the persisted copy, otherwise a cleared or expired alert is
+    // restored as active on the next page load.
+    if (typeof updateAlertCache === 'function') updateAlertCache(name, 'green', Date.now());
+    var id = nameToId[name];
+    if (id !== undefined) {
+        map.removeFeatureState({ source: 'alerts-source', id: id });
+    }
+
+   console.log("Location removed cleanly:", name);
+    // 🚨 THE FIX: Wipe the text marker when the city is cleared from memory
+    removeTTAMarker(name);
+}
+
+(function() {
+    console.log("Tactical Hotkey System: INITIALIZED");
+
+    window.addEventListener('keydown', function(e) {
+        // 1. Log EVERY keypress to verify the listener is alive
+        console.log("Raw Key Detected:", e.key);
+
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+        const key = e.key.toLowerCase();
+
+        // Menu Toggle
+        if (key === 'm') {
+            e.preventDefault();
+            console.log("Action: Attempting ToggleMenu");
+            if (typeof toggleMenu === 'function') {
+                toggleMenu();
+            } else {
+                console.error("Function 'toggleMenu' not found in global scope.");
+            }
+        }
+
+        // Location Snap
+        if (key === 'l') {
+            e.preventDefault();
+            console.log("Action: Attempting Location Snap");
+            if (typeof requestUserLocation === 'function') {
+                requestUserLocation();
+            } else {
+                console.error("Function 'requestUserLocation' not found.");
+            }
+        }
+
+        // Tactical Reset
+        if (key === 'r') {
+            e.preventDefault();
+            console.log("Action: Resetting Map");
+            if (typeof map !== 'undefined' && typeof DEFAULT_CENTER !== 'undefined') {
+                map.flyTo({ 
+                    center: [DEFAULT_CENTER[1], DEFAULT_CENTER[0]], 
+                    zoom: DEFAULT_ZOOM, 
+                    bearing: 0, 
+                    pitch: 0 
+                });
+            } else {
+                console.error("Map or DEFAULT_CENTER variables not accessible.");
+            }
+        }
+
+        // RTL Navigation (Right = Next, Left = Prev)
+        if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+            e.preventDefault();
+            const btnId = (e.key === 'ArrowRight') ? 'tl-next' : 'tl-prev';
+            const btn = document.getElementById(btnId);
+            if (btn) {
+                console.log("Action: Navigating to", btnId);
+                btn.click();
+            } else {
+                console.warn("Navigation button not found:", btnId);
+            }
+        }
+    }, true);
+})();
+</script>
+</body>
+</html>
