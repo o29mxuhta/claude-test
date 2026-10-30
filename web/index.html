@@ -1056,7 +1056,12 @@ function fadeGreenMarkers() {
 
 // 4. UI STATUS REFRESHER
 function updateLiveStatus() {
-    if (!isLiveMode || !initialized) return;
+    if (!isLiveMode) return;
+    renderFeedHealth();
+    if (!initialized && !Object.keys(locationStates).some(function(name) { return locationStates[name].state !== 'green'; })) {
+      if (feedHealth.alerts.error || feedHealth.history.error) setStatus('err', feedFailureSummary());
+      return;
+    }
     var dominant = null, bestP = -1, residentTotal = 0, activeZonesCount = 0;
     var P = { red: 4, brown: 3, purple: 2, yellow: 1 };
 
@@ -1076,6 +1081,10 @@ function updateLiveStatus() {
       var statusLabel = residentTotal > 0 ? (residentTotal.toLocaleString('he-IL') + ' במקלטים • ' + activeZonesCount + ' אזורי התראה') : (activeZonesCount + ' אזורי התראה');
       setStatusHTML(dominant, '<a href="#" id="zoomAlertsLink">' + statusLabel + '</a>');
     } else {
+      if (!allFeedsHealthy()) {
+        setStatus('err', feedFailureSummary());
+        return;
+      }
       var lastTs = 0;
       if (typeof extendedHistory !== 'undefined' && extendedHistory.length > 0) {
           // Search backwards because history is chronological (newest at the end)
@@ -1299,6 +1308,7 @@ try {
     <span id="statusText">מתחבר...</span>
   </div>
   
+  <div id="feedFreshness" style="font-size:11px;line-height:1.5;max-width:340px;padding-top:4px" aria-live="off"></div>
   <div id="statusStats">
     <span id="statusVisitors" style="display:none; color:#555;"></span>
     <span id="statusAlertsToday" style="display:none; color:#ef4444; font-weight:bold;"></span>
@@ -4898,6 +4908,7 @@ function maybeZoomToEvent() {
     document.getElementById('errorDetail').style.display = 'none';
   }
    
+  setInterval(function() { if (typeof feedHealth !== 'undefined') renderFeedHealth(); }, 1000);
   // --- Fetching ---
   function stripBom(text) {
     return text.replace(/^\ufeff/, '');
@@ -4928,6 +4939,73 @@ function forwardAlertToCache(alertData) {
   });
 }
    
+var feedHealth = {
+  alerts: { checkedAt: 0, receivedAt: 0, error: '' },
+  history: { checkedAt: 0, receivedAt: 0, error: '' }
+};
+var FEED_STALE_MS = { alerts: 5000, history: 30000 };
+function feedIsHealthy(kind, now) {
+  var h = feedHealth[kind];
+  return !!h.checkedAt && !h.error && h.receivedAt <= now && now - h.receivedAt <= FEED_STALE_MS[kind] && h.checkedAt <= now && now - h.checkedAt <= FEED_STALE_MS[kind];
+}
+function feedFailureSummary() {
+  var now = Date.now();
+  if (!feedIsHealthy('alerts', now)) return 'שגיאה בחיבור להתרעות';
+  return 'שגיאה בחיבור להיסטוריה';
+}
+function allFeedsHealthy() {
+  var now = Date.now();
+  return feedIsHealthy('alerts', now) && feedIsHealthy('history', now);
+}
+function readCheckedFeed(resp, kind) {
+  if (!resp.ok) return Promise.reject(new Error('HTTP ' + resp.status));
+  var status = Number(resp.headers.get('X-Upstream-Status'));
+  var checkedAt = Date.parse(resp.headers.get('X-Source-Checked-At'));
+  var now = Date.now();
+  if (!(status >= 200 && status < 300) || !Number.isFinite(checkedAt) || checkedAt > now || now - checkedAt > FEED_STALE_MS[kind]) {
+    return Promise.reject(new Error('Missing or stale verified source response'));
+  }
+  return resp.text().then(function(raw) {
+    var text = stripBom(raw).trim();
+    var data = text ? JSON.parse(text) : null;
+    var records = Array.isArray(data) ? data : [data];
+    var valid = kind === 'alerts'
+      ? (!text || records.every(function(item) { return item && typeof item === 'object' && Array.isArray(item.data) && item.data.every(function(location) { return typeof location === 'string'; }); }))
+      : Array.isArray(data) && data.every(function(item) { return item && typeof item === 'object' && (typeof item.data === 'string' || Array.isArray(item.data)) && typeof item.alertDate === 'string'; });
+    if (!valid) throw new Error('Invalid feed payload');
+    // Commit health only after both transport metadata and payload are valid.
+    feedHealth[kind] = { checkedAt: checkedAt, receivedAt: Date.now(), error: '' };
+    return { text: text, data: data };
+  });
+}
+function markFeedFailure(kind, error) {
+  // Retain the previous success timestamp to show its age during an outage.
+  feedHealth[kind].error = error.message || String(error);
+  renderFeedHealth();
+}
+function renderFeedHealth() {
+  var el = document.getElementById('feedFreshness');
+  if (!el) return;
+  el.style.display = isLiveMode ? '' : 'none';
+  var now = Date.now();
+  var activeThreat = typeof locationStates !== 'undefined' && Object.keys(locationStates).some(function(name) { return locationStates[name].state !== 'green'; });
+  var errors = [];
+  if (!feedIsHealthy('alerts', now)) errors.push('התרעות');
+  if (!feedIsHealthy('history', now) && !activeThreat) errors.push('היסטוריה');
+  el.textContent = errors.length ? 'שגיאת חיבור: ' + errors.join(', ') : '';
+  el.style.display = isLiveMode && errors.length && activeThreat ? '' : 'none';
+  var box = document.getElementById('status');
+  var controls = document.querySelector('.maplibregl-ctrl-top-left');
+  if (box && controls) {
+    controls.style.setProperty('top', Math.ceil(box.getBoundingClientRect().bottom + 10) + 'px', 'important');
+    if (typeof positionMenuButton === 'function') positionMenuButton();
+  }
+  // Never erase active threat colors merely because connectivity failed.
+  if (isLiveMode && !allFeedsHealthy() && document.getElementById('statusDot').classList.contains('indicator-green')) {
+    setStatus('err', feedFailureSummary());
+  }
+}
+
   function fetchLiveAlerts() {
    if (isStyleLoading) {
         console.warn("Fetch blocked: Style is currently reloading.");
@@ -4936,40 +5014,28 @@ function forwardAlertToCache(alertData) {
     apiFetch('alerts')
       .then(function(resp) {
         lastCfColo = resp.headers.get('X-CF-Colo') || lastCfColo;
-        if (!resp.ok) throw new Error('HTTP ' + resp.status);
-        return resp.text();
+        return readCheckedFeed(resp, 'alerts');
       })
-      .then(function(text) {
-        text = stripBom(text).trim();
+      .then(function(result) {
         liveErrors = 0;
         try { sessionStorage.setItem('oref-last-poll', String(Date.now())); } catch(e) {}
-        if (initialized && isLiveMode && historyErrors <= 3) updateLiveStatus();
-        
-        if (!text || text === "[]") {
-            lastLiveAlertPayload = ''; // Clear memory when quiet
-            return;
-        }
-
-        // 🚨 FRONTEND DEDUPLICATION FIX: Stop processing if exact payload hasn't changed
+        renderFeedHealth();
+        if (initialized && isLiveMode) updateLiveStatus();
+        var text = result.text;
+        if (!text || text === '[]') { lastLiveAlertPayload = ''; return; }
         if (text === lastLiveAlertPayload) return;
         lastLiveAlertPayload = text;
-
-        var parsedData;
-        try { parsedData = JSON.parse(text); }
-        catch (e) { return; }
-    
-        var alertArray = Array.isArray(parsedData) ? parsedData : [parsedData];
+        var alertArray = Array.isArray(result.data) ? result.data : [result.data];
         alertArray.forEach(function(alert) {
-            // Your existing logic to paint the map
-            processLiveAlert(alert);
-            // 👇 THE INTEGRATION: Send it to the backup cache immediately
-            forwardAlertToCache(alert);
+          processLiveAlert(alert);
+          forwardAlertToCache(alert);
         });
       })
       .catch(function(err) {
         liveErrors++;
+        markFeedFailure('alerts', err);
         lastErrorMsg = 'Live alerts: ' + err.message;
-        if (liveErrors > 3) setStatus('err', 'בעיית תקשורת לפיקוד העורף. מנסה שוב...');
+        if (isLiveMode) updateLiveStatus();
         console.error('Live poll error:', err);
       });
   } // This closes fetchLiveAlerts
@@ -5084,54 +5150,26 @@ function fetchHistory(onDone) {
     apiFetch('history')
       .then(function(resp) {
         lastCfColo = resp.headers.get('X-CF-Colo') || lastCfColo;
-        if (!resp.ok) throw new Error('HTTP ' + resp.status);
-        return resp.text();
+        return readCheckedFeed(resp, 'history').catch(function(err) {
+          if (!(err instanceof SyntaxError)) throw err;
+          return fetch(PROXY_BASE + apiPrefix + '/history', { cache: 'no-store' })
+            .then(function(retry) { return readCheckedFeed(retry, 'history'); });
+        });
       })
-      .then(function(text) {
-        text = stripBom(text).trim();
-
-        // The feed answered successfully — only now is it honest to report a
-        // healthy connection. (This used to run on a synthesised empty payload,
-        // so a dead backend still showed as "Live".)
+      .then(function(result) {
         historyErrors = 0;
         initialized = true;
+        renderFeedHealth();
+        processHistoryEntries(result.data);
         updateLiveStatus();
-
-        if (!text) { if (onDone) onDone(); return; }
-        
-        var entries;
-        try {
-          entries = JSON.parse(text);
-        } catch (parseErr) {
-          console.warn('History JSON truncated, retrying...', parseErr);
-          return fetch(PROXY_BASE + apiPrefix + '/history', { cache: 'no-store' })
-            .then(function(r) { return r.text(); })
-            .then(function(t) {
-              t = stripBom(t).trim();
-              try { entries = JSON.parse(t); }
-              catch (e) { throw e; }
-              processHistoryEntries(entries);
-              
-               if (typeof rebuildTimelineFn === 'function') rebuildTimelineFn();
-               if (onDone) onDone();
-            });
-        }
-        
-        // 1. Process the map polygons
-        processHistoryEntries(entries);
-        
-        // 2. Update the Timeline UI
-         if (typeof rebuildTimelineFn === 'function') rebuildTimelineFn();
-
-        // 3. Finish connection
+        if (typeof rebuildTimelineFn === 'function') rebuildTimelineFn();
         if (onDone) onDone();
-      }) // <-- Fixed: Only ONE closing bracket here!
+      })
       .catch(function(err) {
         historyErrors++;
+        markFeedFailure('history', err);
         lastErrorMsg = 'Alert history: ' + err.message;
-        if (historyErrors > 3) {
-          setStatus('err', 'תקלה בטעינת התרעות קודמות. מנסה שוב...');
-        }
+        if (isLiveMode) updateLiveStatus();
         if (onDone) setTimeout(function() { fetchHistory(onDone); }, 1000);
       });
   }
@@ -5857,6 +5895,8 @@ function processEntries(entries) {
   document.getElementById('historyTimeLabel').textContent = '\u05DE\u05E8\u05D0\u05D4 \u05D4\u05EA\u05E8\u05E2\u05D5\u05EA \u05DE\u05E9\u05E2\u05D4 ' + timeStr + datePart;
   
   reconstructStateAt(time);
+  setStatus('history', 'תצוגת עבר: ' + timeStr + datePart);
+  renderFeedHealth();
   
   // Sync event list scroll
   if (selectedLocation && !_scrollSyncLock) {
