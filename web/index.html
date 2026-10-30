@@ -789,7 +789,7 @@ function updateAlertCache(name, state, since) {
 function setLocationState(name, state, since) {
     var now = Date.now();
     var effectiveSince = since || now;
-    var PRIORITY = { red: 4, brown: 3, purple: 2, yellow: 1, green: 0, hazmat: 3, earthquake: 4 };
+    var PRIORITY = { red: 5, brown: 3, purple: 2, yellow: 1, green: 0, hazmat: 3, earthquake: 4 };
     var existing = locationStates[name];
 
     if (existing && existing.state !== 'green') {
@@ -843,7 +843,7 @@ var locationThreats = {}; // name -> { state: sinceMs }
 function topThreats(name) {
     var t = locationThreats[name];
     if (!t) return [];
-    var PRI = { red: 4, earthquake: 4, brown: 3, hazmat: 3, purple: 2, yellow: 1 };
+    var PRI = { red: 5, earthquake: 4, brown: 3, hazmat: 3, purple: 2, yellow: 1 };
     // Presentation-only tie-break: same tier -> most recently started threat
     // gets the fill, older one shows as the border. Final fallback is a fixed
     // name order so the choice is deterministic, not arrival-order luck.
@@ -5134,7 +5134,7 @@ function processEntries(entries) {
     // Must include brown — omitting it made PRIORITY['brown'] fall back to 0,
     // so terrorist-infiltration alerts were silently discarded during replay
     // whenever any other state was already active at that location.
-    var PRIORITY = { red: 4, brown: 3, purple: 2, yellow: 1, green: 0, hazmat: 3, earthquake: 4 };
+    var PRIORITY = { red: 5, brown: 3, purple: 2, yellow: 1, green: 0, hazmat: 3, earthquake: 4 };
     for (var i = 0; i < extendedHistory.length; i++) {
       var e = extendedHistory[i];
       if (e.alertDate > targetTime) break;
@@ -5215,7 +5215,7 @@ function processEntries(entries) {
 
   function updateShadowState(name, state, since) {
     if (!liveLocationStates) return;
-    var PRIORITY = { red: 4, brown: 3, purple: 2, yellow: 1, green: 0, hazmat: 3, earthquake: 4 };
+    var PRIORITY = { red: 5, brown: 3, purple: 2, yellow: 1, green: 0, hazmat: 3, earthquake: 4 };
     var existing = liveLocationStates[name];
     if (existing) {
       if (state === 'green') {
@@ -6042,7 +6042,9 @@ function processEntries(entries) {
   // --- Init ---
 
 document.addEventListener('DOMContentLoaded', function() {
-      if (!localStorage.getItem('oref-beta-dismissed')) {
+      // Banner shows on every page load (per product decision); the close
+      // button hides it for the current session only, no persistence.
+      {
           var banner = document.createElement('div');
           
           // 🚨 THE FIX: Give it the ID so our CSS can find it!
@@ -6072,7 +6074,6 @@ document.addEventListener('DOMContentLoaded', function() {
           document.getElementById('beta-close').addEventListener('click', function() {
               banner.style.opacity = '0';
               setTimeout(function() { banner.remove(); }, 300);
-              localStorage.setItem('oref-beta-dismissed', 'true');
           });
       }
   })
