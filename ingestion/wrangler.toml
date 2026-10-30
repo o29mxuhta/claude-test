@@ -3,8 +3,11 @@ main = "src/index.js"
 compatibility_date = "2024-01-01"
 
 # Upstream feed source: the relay in front of oref's GetAlarmsHistory (mode=1).
-# TODO(activate): verify api.redmap.dev/api2/alarms-history serves this feed.
-# If the relay requires a key, set the RELAY_KEY secret (sent as X-Ingest-Key).
+# Verified 2026-10-30: https://api.redmap.dev/api2/alarms-history answers
+# HTTP 200 with a JSON array and no key. It was empty at check time, so the
+# non-empty entry shape still needs the activation canary (step 7 of
+# docs/r2-history-migration.md). If the relay ever requires a key, set the
+# RELAY_KEY secret (sent as X-Ingest-Key).
 # This is about READING the upstream feed - unrelated to the worker's own
 # public /ingest endpoint, which stays unauthenticated by design.
 [vars]
