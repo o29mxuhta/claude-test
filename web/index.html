@@ -3126,6 +3126,113 @@ function todayDateStr() {
   };
 
   // --- Colors ---
+  // Explicit historical->current zone aliases. 12 verified by identical zone id across the 2024-09 and
+  // 2026-02 zone lists; 5 punctuation variants (חיפה-מפרץ, טל-אל, קריית טבעון-בית זייד, ניל''י, 'ביר הדאג)
+  // plus מודיעין -> מודיעין מכבים רעות.
+  var HISTORICAL_ALIASES = {
+    "אדוריים": "אדורים",
+    "בירהדאג": "ביר הדאג'",
+    "ביתספראורטבנימינה": "בי\"ס כרמים בנימינה",
+    "גבעתהראלוגבעתהרואה": "גבעת הראל",
+    "חוואלד": "כפר ח'וואלד",
+    "חיפהמפרץ": "חיפה - מפרץ",
+    "חלמיש": "נווה צוף",
+    "טלאל": "טל - אל",
+    "כפרהנוערימיןאורד": "ניר עציון, ימין אורד",
+    "כפריעבץ": "יעבץ, יעף",
+    "מודיעין": "מודיעין מכבים רעות",
+    "מצוקעורבים": "קלע אלון",
+    "מרכזימיקיסריה": "נמל קיסריה",
+    "נילי": "נילי",
+    "קידר": "קדר",
+    "קרייתטבעוןביתזייד": "קריית טבעון - בית זייד",
+    "שבלי": "שיבלי אום אלג'נם",
+    "שומרת": "שמרת"
+  };
+  // Retired zones (id gone from the 2026-02 list) mapped to the single current polygon that CONTAINS their
+  // last known position (2024-09 third-party snapshot list). Deterministic display association only;
+  // not zone identity, not the historical alert boundary.
+  var HISTORICAL_CONTAINERS = {
+    "אבונוור": "קדר דרום",
+    "אוםאלגנם": "שיבלי אום אלג'נם",
+    "אורוןתעשייהומסחר": "ירוחם",
+    "אזורתעשייהאכזיבמילואות": "איזור תעשייה מילואות צפון",
+    "אזורתעשייהחצורהגלילית": "חצור הגלילית",
+    "אזורתעשייהטירה": "טירה",
+    "אזורתעשייהטמרה": "טמרה",
+    "אזורתעשייהצבאים": "שדה נחום",
+    "אזורתעשייהצמח": "צמח",
+    "אזורתעשייהרגבים": "גבעת עדה",
+    "אזורתעשייהרגמ": "אזור תעשייה נשר - רמלה",
+    "אלחוואלדמערב": "כפר ח'וואלד",
+    "אמציה": "כרמי קטיף ואמציה",
+    "אשדותיעקבאיחוד": "אשדות יעקב",
+    "אשדותיעקבמאוחד": "אשדות יעקב",
+    "ביתחזון": "כפר הרא''ה",
+    "ביתסוהרהשרון": "תל יצחק",
+    "ביתסוהרמגידו": "קיבוץ מגידו",
+    "ביתסוהרנפחא": "שאנטי במדבר",
+    "ביתסוהרשיטהוגלבוע": "בית השיטה",
+    "גבעותגורל": "אזור תעשייה עידן הנגב",
+    "דוגה": "רמות",
+    "דוגית": "רמות",
+    "דניאל": "קריית חינוך מרחבים",
+    "המכללההאקדמיתכנרת": "צמח",
+    "הרהנגב": "מצפה רמון",
+    "חברון": "היישוב היהודי חברון",
+    "חוותאירוחגורן": "אילון",
+    "חוותיזרעם": "נתיבות",
+    "חוותערנדל": "יהל",
+    "חוותשדהבר": "שדה בר",
+    "חוותשיקמים": "דורות",
+    "חוףאמנון": "אלמגור",
+    "חוףגולן": "רמות",
+    "חוףגופרה": "עין גב",
+    "חוףכורסי": "רמות",
+    "חוףכינר": "רמות",
+    "חוףניצנים": "ניצן",
+    "חוףסוסיתא": "עין גב",
+    "חיבריטבתה": "סמר",
+    "חלוקים": "רמות",
+    "חניוןהנתיבמהיר": "בית דגן",
+    "טבחה": "גינוסר",
+    "יערותהכרמל": "גבעת וולפסון",
+    "כושירמון": "פארן",
+    "כיסראסמיע": "כסרא סמיע",
+    "כלאדמון": "גבעת וולפסון",
+    "כפרטבאש": "כעביה טבאש",
+    "כפריסיף": "כפר יאסיף",
+    "כפרנחום": "אמנון",
+    "לבנון": "רמות",
+    "מלוןאחוזתירדן": "שדה אליעזר",
+    "מלוןסיקססנססשחרות": "שחרות",
+    "מלוןפרא": "גדות",
+    "ממשית": "דימונה",
+    "מפעלאגריגדה": "יד בנימין",
+    "מתחםחנהוסעשפיים": "שפיים",
+    "מתחםצומתשוקת": "כרמית",
+    "נביסמואל": "גבעת זאב",
+    "נעורה": "נאעורה",
+    "סינמהסיטיגלילות": "מתחם גלילות",
+    "סעייהמולדה": "סעווה",
+    "עבדת": "שאנטי במדבר",
+    "עיןכמונים": "כפר חנניה",
+    "עינבר": "כפר חנניה",
+    "עיראובות": "עין חצבה",
+    "עשאהל": "עשהאל",
+    "צאלון": "רמות",
+    "צומתבנימינה": "בית חנניה",
+    "צומתדבירה": "בית קמה",
+    "צומתהאלה": "גבעת ישעיהו",
+    "קצראסיר": "קסר א-סר",
+    "רמתהנדיב": "בי\"ס כרמים בנימינה",
+    "רפטינגנהרהירדן": "גדות",
+    "שדהאברהם": "שדי אברהם",
+    "שהם": "שוהם",
+    "שערהגיא": "מסילת ציון",
+    "תעשיוןחצב": "נחשונים",
+    "תקומהוחוותיזרעם": "תקומה"
+  };
   var COLORS = { red: '#ff0000', brown: '#8b4513', purple: '#9922cc', yellow: '#ffcc00', green: '#00cc00', hazmat: '#009999', earthquake: '#ff8800' }; // hazmat/earthquake colors PROPOSED - pending Gil's pick
   // --- Sound ---
   function getAudioContext() {
@@ -5067,7 +5174,16 @@ function processEntries(entries) {
         // Single raw string; the expander decides whether it is one place or many.
         var rawLocations = Array.isArray(e.data) ? e.data : [String(e.data)];
         var locations = expandAndResolveLocations(rawLocations);
-        
+
+        // Historical fallback (history replay only): a 2023-era zone name no current
+        // polygon knows. Resolve via the explicit alias/container tables only -
+        // deterministic table lookup, never fuzzy-matched. Live alert processing never reaches this path.
+        if (!locations.length && rawLocations.length === 1) {
+          var fkey = foldName(rawLocations[0]);
+          var aliasTarget = HISTORICAL_ALIASES[fkey] || HISTORICAL_CONTAINERS[fkey];
+          if (aliasTarget) locations = [aliasTarget];
+        }
+
         for (var j = 0; j < locations.length; j++) {
             var location = locations[j];
             if (!location) continue;
@@ -5133,6 +5249,9 @@ function processEntries(entries) {
       });
   }
 
+  // Renders the retired-zone point markers for the current replay position and
+  // keeps the history-mode legend honest: points are 2024-09 list positions,
+  // not official alert-zone polygons.
   function reconstructStateAt(targetTime) {
     cancelPolygonHint();
     // Clear all polygons
@@ -5174,7 +5293,7 @@ function processEntries(entries) {
     for (var loc in accumulated) {
       var s = accumulated[loc].state;
       var sinceTime = accumulated[loc].since;
-      if (nameToId[loc] === undefined) continue;
+      if (nameToId[loc] === undefined) continue; // unresolved historical name: nothing to show
       if (s === 'green') {
         var elapsed = targetTime - sinceTime;
         if (elapsed >= GREEN_FADE_MS) continue; // already faded
@@ -6175,7 +6294,7 @@ document.addEventListener('app:stateChanged', function() {
     // 🚨 THE FIX: Load both the Polygons AND the Time-to-Shelter data simultaneously
     Promise.all([
         fetch('locations_polygons.json').then(function(r) { return r.json(); }),
-        fetch('cities.json').then(function(r) { return r.json(); })
+        fetch('cities.json').then(function(r) { return r.json(); }),
     ])
     .then(function(responses) {
 var data = responses[0]; 
