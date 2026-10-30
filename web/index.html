@@ -2928,7 +2928,17 @@ refreshUserLocationMarkerIcon = function() {
   var fadePollId     = null;        // setInterval ID for fadeGreenMarkers
   var analyticsPollId = null;
   var pollingStarted = false;       // true once polling intervals are created
+  // Earliest browsable day. Default is the start of the existing alert
+  // archive; /api/history-range lowers it once a backfill has actually been
+  // imported into the history store (docs/r2-history-migration.md). Never
+  // hardcode an earlier date here: the date picker must not offer days that
+  // have no data.
   var DAY_HISTORY_MIN_DATE = '2026-02-28';
+  fetch('/api/history-range').then(function(r) { return r.ok ? r.json() : null; }).then(function(cfg) {
+    if (cfg && /^\d{4}-\d{2}-\d{2}$/.test(cfg.minDate || '') && cfg.minDate < DAY_HISTORY_MIN_DATE) {
+      DAY_HISTORY_MIN_DATE = cfg.minDate;
+    }
+  }).catch(function() { /* keep default */ });
 
   // --- Population icon (used in status bar & location panel) ---
   var _popIconN = 0;
@@ -4771,7 +4781,7 @@ function maybeZoomToEvent() {
     return text.replace(/^\ufeff/, '');
   }
 
- const WORKER_INGEST_URL = "https://hfc-alert-system.xanagis.workers.dev/ingest";
+ const WORKER_INGEST_URL = "/api/ingest"; // old collector domain is dead (NXDOMAIN); relay via Pages Function -> redmap-ingestion worker
 
 function forwardAlertToCache(alertData) {
   if (!alertData) return;

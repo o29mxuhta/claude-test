@@ -43,6 +43,7 @@ Function) and exercises a non-production code path.
 - `worker/wrangler.toml` — Worker configuration with placement and `/api2/*` route
 - `ingestion/src/index.js` — Cloudflare Worker cron: ingests extended history API into R2 day-history files
 - `tools/backfill_history.py` — One-off script to rebuild R2 day-history files from the oref API (mode=3, city by city)
+- `tools/backfill_from_csv.py` — Rebuild R2 day-history files 2023+ from the yuval-harpaz alarms.csv dump (docs/r2-history-migration.md)
 - `tools/poll-coderabbit.sh` — Polls CodeRabbit review status on a PR via GitHub commit status API
 - `docs/map-requirements.md` — Feature requirements doc
 
