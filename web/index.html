@@ -3014,6 +3014,9 @@ function todayDateStr() {
     get locationStates() { return locationStates; },
     get locationHistory() { return locationHistory; },
     get featureMap() { return featureMap; },
+    get israelBorder() { return ISRAEL_ZONE_RINGS[0]; },
+    get extendedHistory() { return extendedHistory; },
+    get dayHistoryReady() { return dayHistoryReady; },
     ensureOrefPoints: _ensureOrefPoints,
     get userPosition() { return currentUserLatLng || null; },
     get isLiveMode() { return isLiveMode; },
@@ -6463,7 +6466,7 @@ var bounds = featureBounds(feature);
         await navigator.share({
           title: 'מפת התגוננות',
           text: 'התרעות פיקוד העורף בזמן אמת',
-          url: 'https://redmap.dev'
+          url: 'https://redmap.me'
         });
       } catch (e) {
         if (e.name !== 'AbortError') console.error('Share failed:', e);
