@@ -11,6 +11,12 @@
 <script src="https://unpkg.com/pmtiles@3/dist/pmtiles.js"></script>
 <script src="https://unpkg.com/@protomaps/basemaps@5.7.2/dist/basemaps.js"></script>
 <style>
+   
+body.dark #dev-toggle-btn { background: rgba(78,79,82,0.95) !important; border: 1.5px solid #9a9c9f !important; }
+   
+body:has(#menu-btn[aria-expanded="true"]) #dev-tools-container { top: 90px !important; right: 12px !important; bottom: auto !important; left: auto !important; }
+
+
 /* =========================================
    1. BASE RESETS & MAPLIBRE OVERRIDES
 ========================================= */
