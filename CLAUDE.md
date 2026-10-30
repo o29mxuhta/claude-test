@@ -146,10 +146,12 @@ Do **not** use `cat`/`category` for classification — the same number is reused
 | `השוהים במרחב המוגן יכולים לצאת...` | Shelter occupants can exit | 🟢 Green (fades) |
 | `תושבי האזורים הבאים אינם צריכים לשהות יותר בסמיכות למרחב המוגן.` | No longer need to stay near shelter | 🟢 Green (fades) |
 | `סיום שהייה בסמיכות למרחב המוגן` | End of stay near shelter | 🟢 Green (fades) |
+| `חומרים מסוכנים` / `אירוע חומרים מסוכנים` | Hazardous materials (community-observed title; exact live payload not yet verified) | Teal `hazmat` (PROPOSED #009999, pending owner pick) |
+| `רעידת אדמה` | Earthquake (real alert pushed via the Tru'a system, Oct 2024 press reports) | Orange `earthquake` (PROPOSED #ff8800, pending owner pick) |
 
 - Green titles are matched by substring (`הסתיים` — covers `האירוע הסתיים` and `אירוע חדירת מחבלים הסתיים`; `ניתן לצאת` (excluding titles that also contain `להישאר בקרבתו`), `החשש הוסר`, `יכולים לצאת`, `אינם צריכים לשהות`, `סיום שהייה בסמיכות`) to catch variants.
 - Yellow titles are matched by exact string or substring: `לשפר את המיקום למיגון המיטבי`, `להישאר בקרבתו`, `התקרבו למרחב מוגן` (substring — also catches the `איום מלבנון - …` prefixed form).
-- Threat titles (red `ירי רקטות וטילים`, purple `חדירת כלי טיס עוין`, brown `חדירת מחבלים`) are matched by **substring**, so combined forms like `<threat> - היכנסו למרחב המוגן` classify by threat. The green "ended" check runs first, so `<threat> - האירוע הסתיים` stays green.
+- Threat titles (red `ירי רקטות וטילים`, purple `חדירת כלי טיס עוין`, brown `חדירת מחבלים`, hazmat `חומרים מסוכנים`, earthquake `רעידת אדמה`) are matched by **substring**, so combined forms like `<threat> - היכנסו למרחב המוגן` classify by threat. The green "ended" check runs first, so `<threat> - האירוע הסתיים` stays green.
 - API sometimes uses double spaces in titles — normalize with `.replace(/\s+/g, ' ')` before matching.
 - Unknown titles default to Red and log a console warning.
 
