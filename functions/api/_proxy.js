@@ -3,24 +3,22 @@ const OREF_HEADERS = {
   'X-Requested-With': 'XMLHttpRequest',
 };
 
+// The live API host the production client already uses (web/index.html
+// PROXY_BASE = 'https://api.redmap.dev'). The previous pool entry
+// (oref-proxy.xanagis.workers.dev) was deleted and its domain no longer
+// resolves, so every redirect to it failed.
 const NON_TLV_PROXY_HOSTS = [
-  'https://oref-proxy.xanagis.workers.dev',
-  //  'https://orefproxy6.oref-map.org',
-  // 'https://orefproxy7.oref-map.org',
+  'https://api.redmap.dev',
 ];
 
-// Dedicated pool for TLV traffic. NOTE: currently the same single host as the
-// non-TLV pool, so there is no real isolation yet — add distinct hosts here
-// before relying on it. TLV traffic does not normally reach this pool at all
-// (see orefProxy: TLV is served directly by this Function).
+// Dedicated pool for TLV traffic. TLV traffic does not normally reach this
+// pool at all (see orefProxy: TLV is served directly by this Function).
 const TLV_PROXY_HOSTS = [
-  'https://oref-proxy.xanagis.workers.dev',
-  //  'https://oreftest.kon40.com',
-  //  'https://orefproxy6.oref-map.org',
+  'https://api.redmap.dev',
 ];
 
 const PROXY_HOST_PATTERNS = [
-  /^oref-proxy\d*\.xanagis\d*\.workers\.dev$/,
+  /^api\.redmap\.dev$/,
   /^oreftest\.kon40\.com$/,
 ];
 
