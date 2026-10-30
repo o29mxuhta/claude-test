@@ -184,6 +184,7 @@ body {
   .chart-inline svg { max-width: 100%; }
 }
 </style>
+<script src="i18n.js"></script>
 </head>
 <body>
 
@@ -193,7 +194,7 @@ body {
 </a>
 
 <div class="logo-banner">
-  <img src="/logo.png" alt="מפת העורף">
+  <img src="/icon-192.png" alt="מפת העורף">
 </div>
 
 <div class="content">
@@ -202,10 +203,10 @@ body {
   <div class="row row-reverse">
     <div class="card">
       <h2>איך זה עובד</h2>
-      <p>המפה מציגה התרעות פיקוד העורף בזמן אמת. הנתונים מגיעים ישירות מממשק ה-API הציבורי של פיקוד העורף, ומוצגים על גבי מפה אינטראקטיבית.</p>
-      <p>כל אזור מקבל צבע לפי סוג ההתרעה: אדום לירי רקטות וטילים, סגול לחדירת כטב"מ, צהוב להתרעה מוקדמת, וירוק כשהאירוע הסתיים.</p>
-      <p>ניתן לצפות בהיסטוריית התרעות קודמות באמצעות ציר הזמן, ולהתקרב לכל אזור במפה.</p>
-      <p class="data-source">מקור הנתונים: ממשק ה-API הציבורי של פיקוד העורף.</p>
+      <p>המפה מציגה את התרעות פיקוד העורף על גבי מפה אינטראקטיבית.</p>
+      <p>האזורים מסומנים לפי סוג ההתרעה: אדום לירי רקטות וטילים, סגול לחדירת כלי טיס עוין, חום לחדירת מחבלים, צהוב להתרעה מוקדמת וירוק כשהאירוע הסתיים.</p>
+      <p>אפשר לצפות בהיסטוריית ההתרעות באמצעות ציר הזמן ולהתקרב לכל אזור במפה.</p>
+      <p>הנתונים מתקבלים מממשק ההתרעות הציבורי של פיקוד העורף דרך שרת האתר. האתר בודק אם התקבלו התרעות חדשות מדי שנייה; ייתכנו עיכובים בעדכון.</p>
     </div>
     <div class="shot shot-desktop">
       <img src="/about/timeline-mobile.png" alt="ציר זמן - התרעות קודמות">
@@ -219,134 +220,28 @@ body {
   <div class="row">
     <div class="card">
       <h2>קוד פתוח</h2>
-      <p>מפת העורף הוא פרויקט קוד פתוח. קוד המקור זמין ב-GitHub, וכל אחד מוזמן לתרום, לדווח על באגים, או להציע שיפורים.</p>
-      <p>האתר מאוחסן על תשתית <a href="https://www.cloudflare.com/" target="_blank" rel="noopener">Cloudflare</a>, מה שמבטיח זמינות גבוהה וביצועים מהירים.</p>
+      <p>מפת העורף הוא פרויקט קוד פתוח ברישיון AGPL-3.0. קוד המקור זמין ב-GitHub, ואפשר לתרום קוד, לדווח על תקלות ולהציע שיפורים.</p>
+      <p>האתר מבוסס על <a href="https://github.com/maorcc/oref-map" target="_blank" rel="noopener">oref-map</a>, שנוצר על ידי מאור קונפורטי, ומאוחסן על תשתית <a href="https://www.cloudflare.com/" target="_blank" rel="noopener">Cloudflare</a>.</p>
       <div class="btn-row">
-        <a class="gh-btn" href="https://github.com/maorcc/oref-map" target="_blank" rel="noopener">
+        <a class="gh-btn" href="https://github.com/o29mxuhta/claude-test" target="_blank" rel="noopener">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="#333"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
           קוד המקור ב-GitHub
         </a>
-        <a class="gh-btn" href="https://github.com/maorcc/oref-map/issues/new" target="_blank" rel="noopener">
+        <a class="gh-btn" href="https://github.com/o29mxuhta/claude-test/issues/new" target="_blank" rel="noopener">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#333" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
           דיווח על בעיה
         </a>
       </div>
-      <div class="chart-inline">
-        <div class="chart-col-header">
-          <h3>מספר המשתמשים ביום</h3>
-          <span class="chart-inline-dates">החודש האחרון · <span id="chart-dates"></span></span>
-        </div>
-        <div id="chart-area"><div class="chart-error">טוען...</div></div>
-        <p class="chart-desc">מפת העורף משמשת עשרות אלפי אנשים מדי יום כמקור מידע מהיר ואמין בזמן אירועי חירום.</p>
-      </div>
     </div>
-  </div>
-
-  <!-- Story — full width -->
-  <div class="card card-full">
-    <h2>הסיפור</h2>
-    <p>כשהמלחמה פרצה ב-28 בפברואר 2026 ומערכת ההתרעות המוקדמות של פיקוד העורף נכנסה לפעולה, ציפיתי שהאפליקציות הקיימות (צבע אדום, פיקוד העורף) יציגו את ההתרעות על גבי מפה בצורה פשוטה וברורה. אחרי כמה ימים שבהם זה לא קרה, החלטתי לבנות את הכלי בעצמי.</p>
-    <p>הרגע המכונן היה אחרי חצות. קיבלתי התרעה מוקדמת וניסיתי להחליט אם לקום למרחב המוגן או לחכות לאזעקה. גללתי ברשימה ארוכה של יישובים וניסיתי לנחש מה הסיכוי שתהיה אזעקה אצלי בזכרון יעקב. זה היה מתסכל. היה ברור שצריך כלי שמציג את המידע ויזואלית, מפה שמאפשרת להבין את המצב תוך שניות.</p>
-    <p>תוך ימים ספורים הגרסה הראשונה הייתה באוויר. המשובים היו חד-משמעיים, אנשים חיכו לכלי כזה.</p>
-    <p>אני מאור קונפורטי, מנהל ומפתח תוכנה. מפת העורף היא פרויקט קוד פתוח שנוצר מתוך צורך אמיתי. במהלך הדרך תרמו ותורמים לפרויקט אנשים רבים, בקוד, בדיווח על בעיות, וברעיונות לשיפור. תודה לכולם.</p>
   </div>
 
   <!-- Disclaimer -->
   <div class="card card-full card-warn">
+    <h2>הבהרה חשובה</h2>
     אין להסתמך על המידע והתכנים המוצגים באתר זה. <strong>בכל מקרה יש לנהוג בהתאם להנחיות פיקוד העורף.</strong>
   </div>
 
 </div>
 
-<script>
-(function() {
-  fetch('/api/analytics-daily').then(function(r) {
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    return r.json();
-  }).then(function(data) {
-    if (data.daily && data.daily.length) {
-      renderChart(data.daily);
-    } else {
-      showChartError('אין נתונים');
-    }
-  }).catch(function() {
-    showChartError('לא ניתן לטעון');
-  });
-
-  function showChartError(msg) {
-    document.getElementById('chart-area').innerHTML = '<div class="chart-error">' + msg + '</div>';
-  }
-
-  function renderChart(rawDaily) {
-    // 30 days excluding today (partial)
-    var now = new Date();
-    var days = [];
-    for (var i = 30; i >= 1; i--) {
-      var d = new Date(now);
-      d.setDate(d.getDate() - i);
-      days.push(d.toISOString().slice(0, 10));
-    }
-
-    var lookup = {};
-    rawDaily.forEach(function(e) { lookup[e.date] = e.visitors; });
-
-    var data = days.map(function(date) {
-      return { date: date, visitors: lookup[date] || 0 };
-    });
-
-    // Show date range (DD.M.YY)
-    function fmtDate(s) {
-      var p = s.split('-');
-      return parseInt(p[2]) + '.' + parseInt(p[1]) + '.' + p[0].slice(2);
-    }
-    document.getElementById('chart-dates').textContent = fmtDate(days[0]) + ' עד ' + fmtDate(days[days.length - 1]);
-
-    // 3-day moving average
-    var ma = data.map(function(_, i, arr) {
-      var start = Math.max(0, i - 2);
-      var slice = arr.slice(start, i + 1);
-      var sum = slice.reduce(function(s, e) { return s + e.visitors; }, 0);
-      return sum / slice.length;
-    });
-
-    var W = 220, H = 90;
-    var ml = 36, mr = 4, mt = 12, mb = 4;
-    var cw = W - ml - mr;
-    var ch = H - mt - mb;
-    var n = ma.length;
-    var maxV = Math.max.apply(null, ma);
-    if (maxV === 0) maxV = 1;
-    // Round up to nice number
-    var mag = Math.pow(10, Math.floor(Math.log10(maxV)));
-    maxV = Math.ceil(maxV / mag) * mag;
-
-    function x(i) { return ml + i * (cw / (n - 1)); }
-    function y(v) { return mt + ch - (v / maxV) * ch; }
-
-    var pts = ma.map(function(v, i) { return x(i) + ',' + y(v); });
-
-    var areaPath = 'M' + pts[0];
-    for (var i = 1; i < pts.length; i++) areaPath += ' L' + pts[i];
-    areaPath += ' L' + x(n - 1) + ',' + (mt + ch) + ' L' + x(0) + ',' + (mt + ch) + ' Z';
-
-    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" xmlns="http://www.w3.org/2000/svg">';
-
-    // Y-axis: gridlines + labels in Hebrew
-    var ticks = [0, Math.round(maxV / 2), maxV];
-    ticks.forEach(function(val) {
-      var yy = y(val);
-      svg += '<line x1="' + ml + '" y1="' + yy + '" x2="' + (W - mr) + '" y2="' + yy + '" stroke="#e0ddd8" stroke-width="0.5"/>';
-      var label = val >= 1000 ? Math.round(val / 1000) + ' אלף' : val;
-      svg += '<text x="' + (ml - 4) + '" y="' + (yy - 2) + '" text-anchor="end" fill="#aaa" font-size="8" font-family="Arial">' + label + '</text>';
-    });
-
-    svg += '<path d="' + areaPath + '" fill="rgba(59,130,246,0.10)"/>';
-    svg += '<polyline points="' + pts.join(' ') + '" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
-    svg += '</svg>';
-
-    document.getElementById('chart-area').innerHTML = svg;
-  }
-})();
-</script>
 </body>
 </html>

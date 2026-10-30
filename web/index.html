@@ -1,4 +1,4 @@
-<html dir="rtl">
+<html dir="rtl" lang="he">
 <head>
 <meta charset="utf-8">
 <link rel="icon" href="/icon-32.png" sizes="32x32">
@@ -8,6 +8,7 @@
 <title>התרעות פיקוד העורף בזמן אמת</title>
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css">
 <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
+<script src="i18n.js"></script>
 <script src="https://unpkg.com/pmtiles@3/dist/pmtiles.js"></script>
 <script src="https://unpkg.com/@protomaps/basemaps@5.7.2/dist/basemaps.js"></script>
 <style>
@@ -1104,12 +1105,11 @@ try {
   <div id="menu-lang" class="menu-item menu-setting">
     <div class="menu-item-row">
       <span class="menu-item-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15 15 0 0 1 4 10 15 15 0 0 1-4 10 15 15 0 0 1-4-10 15 15 0 0 1 4-10z"/></svg></span>
-      <span id="lang-label" class="menu-item-label">שפת מפה</span>
+      <span id="lang-label" class="menu-item-label">שפה</span>
     </div>
     <select id="lang-select" class="menu-setting-select" aria-labelledby="lang-label">
       <option value="he">עברית</option>
       <option value="en">English</option>
-      <option value="ar">العربية</option>
       <option value="ru">Русский</option>
     </select>
   </div>
@@ -1629,6 +1629,14 @@ var RED_SEA_MASK = [[20.0, 10.0], [45.0, 10.0], [45.0, 29.488], [20.0, 29.488], 
 
       // 2. BULLETPROOF DEEP CLONE: Prevents MapLibre parser crashes
       var l = JSON.parse(JSON.stringify(orig));
+
+      // Non-Hebrew UI: label shows the selected language, then English. A place with
+      // neither keeps its polygon but shows no label (never the Hebrew local name).
+      if (typeof currentLang !== 'undefined' && currentLang !== 'he' && l.type === 'symbol' && l.layout && l.layout['text-field']) {
+        if (JSON.stringify(l.layout['text-field']).indexOf('name') !== -1) {
+          l.layout['text-field'] = ['coalesce', ['get', 'name:' + currentLang], ['get', 'name:en']];
+        }
+      }
 
       // 3. ERASE ALL DOTS/ICONS
       if (l.type === 'symbol') {
@@ -6262,7 +6270,7 @@ function startHeartbeat() {
       return;
     }
     var matches = Object.keys(featureMap).filter(function(name) {
-      return name.includes(q);
+      return name.includes(q) || (window.__i18nMatchName ? window.__i18nMatchName(name, q) : false);
     }).slice(0, 20);
 
     soundResults.innerHTML = matches.map(function(m) {
@@ -6285,7 +6293,7 @@ function startHeartbeat() {
       return;
     }
     var matches = Object.keys(featureMap).filter(function(name) {
-      return name.includes(q);
+      return name.includes(q) || (window.__i18nMatchName ? window.__i18nMatchName(name, q) : false);
     }).slice(0, 20);
 
     searchResults.innerHTML = matches.map(function(m) {
@@ -6427,6 +6435,10 @@ var bounds = featureBounds(feature);
     try { localStorage.setItem('oref-map-lang', langSelect.value); } catch(e) {}
     location.reload();
   });
+
+  // --- Menu: About ---
+  var menuAbout = document.getElementById('menu-about');
+  if (menuAbout) menuAbout.addEventListener('click', function() { window.location.href = 'about.html'; });
 
    
    
