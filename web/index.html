@@ -2139,6 +2139,41 @@ var map = new maplibregl.Map({
     fadeDuration: 0,
     attributionControl: false
 });
+
+   // --- Map anchors: the view stays on the alert-polygon area ---------------
+   // Panning is clamped to the union bbox of every alert polygon in
+   // locations_polygons.json (verified against the live file on 2026-10-31:
+   // W 34.2675 Kerem Shalom, E 35.8954 Qeshet, S 29.4878 Eilat,
+   // N 33.3352 Majdal Shams) plus a small functional margin.
+   // This deliberately does NOT use a tight maxBounds: MapLibre responds to a
+   // narrow bounds box by raising the effective minZoom so the viewport always
+   // fits inside it, and on wide desktop screens that cuts the tall, narrow
+   // country down to a horizontal strip. Clamping only the camera CENTER keeps
+   // minZoom 6.8 and the whole-country zoom-out intact, while making it
+   // impossible to pan away into Egypt, Jordan, the sea or the empty tiles.
+   // buildPolygons re-derives the box from the real polygon data on every load,
+   // so the anchors track the polygons instead of drifting from them.
+   var ANCHOR_PAD = { w: 0.28, e: 0.27, s: 0.15, n: 0.22 };
+   var anchorBox = {
+     w: 34.2675 - ANCHOR_PAD.w,
+     e: 35.8954 + ANCHOR_PAD.e,
+     s: 29.4878 - ANCHOR_PAD.s,
+     n: 33.3352 + ANCHOR_PAD.n
+   };
+   function clampToAnchor(center) {
+     var lng = Math.min(Math.max(center.lng, anchorBox.w), anchorBox.e);
+     var lat = Math.min(Math.max(center.lat, anchorBox.s), anchorBox.n);
+     if (lng === center.lng && lat === center.lat) return null;
+     return [lng, lat];
+   }
+   map.on('move', function () {
+     var clamped = clampToAnchor(map.getCenter());
+     if (clamped) map.setCenter(clamped);
+   });
+   // A center saved in localStorage before the anchors existed (e.g. out in
+   // Jordan) self-heals here on load instead of waiting for the first pan.
+   var initialClamped = clampToAnchor(map.getCenter());
+   if (initialClamped) map.setCenter(initialClamped);
    
   // Supply the sea-texture fill-pattern. Registered here, right after construction
   // and before the first frame renders, so the initial style's water texture and
@@ -3613,6 +3648,26 @@ function buildPolygons(data, onReady) {
     // first call if polygons win the race, in which case the cities loader
     // rebuilds the index.
     buildNameIndex(Object.keys(featureMap), cachedCitiesData);
+
+    // Re-derive the pan anchors from the actual polygons (see the map-anchor
+    // note above), so future polygon updates move the anchors with the data.
+    var abx = { w: 180, e: -180, s: 90, n: -90 };
+    features.forEach(function (f) {
+      f.geometry.coordinates.forEach(function (ring) {
+        ring.forEach(function (pt) {
+          if (pt[0] < abx.w) abx.w = pt[0];
+          if (pt[0] > abx.e) abx.e = pt[0];
+          if (pt[1] < abx.s) abx.s = pt[1];
+          if (pt[1] > abx.n) abx.n = pt[1];
+        });
+      });
+    });
+    anchorBox = {
+      w: abx.w - ANCHOR_PAD.w,
+      e: abx.e + ANCHOR_PAD.e,
+      s: abx.s - ANCHOR_PAD.s,
+      n: abx.n + ANCHOR_PAD.n
+    };
 
     polygonsGeoJSON.features = features;
     updateMapLibreSource();
