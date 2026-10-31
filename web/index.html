@@ -127,6 +127,9 @@ html, body { height: 100%; font-family: Arial, sans-serif; }
   text-align: center;  
 }
 body.history-mode-active #disclaimer-line { display: none !important; }
+/* History view: keep the dev-tools button out of the timeline panel's way */
+body.history-mode-active #dev-tools-container,
+body.viewing-past-date #dev-tools-container { display: none !important; }
 
 .status-main-row {
   display: flex;
@@ -319,15 +322,16 @@ body.panel-open #timeline-btn, body.driving #timeline-btn { display: none !impor
    minimum — shrinking the transport buttons past that would trade map area for
    misses on the scrub controls. */
 #up-timeline { flex-shrink: 0; direction: ltr; padding: 6px 10px 4px; border-top: 1px solid #eee; }
-#timeline-slider-wrap { position: relative; width: 100%; padding-bottom: 4px; }
-#timeline-ticks { position: relative; width: calc(100% - 16px); margin: 0 8px; height: 8px; pointer-events: none; border-radius: 4px; overflow: hidden; background: #eee; }
+#timeline-slider-wrap { position: relative; width: 100%; padding-bottom: 8px; }
+#timeline-ticks { position: relative; width: calc(100% - 13px); margin: 0 6.5px; height: 8px; pointer-events: none; border-radius: 4px; overflow: hidden; background: #eee; }
 #timeline-ticks span { position: absolute; height: 100%; top: 0; opacity: 0.85; }
-#timeline-slider { width: 100%; cursor: pointer; -webkit-appearance: none; appearance: none; height: 4px; border-radius: 2px; background: #93c5fd; }
+#timeline-slider { width: 100%; cursor: pointer; -webkit-appearance: none; appearance: none; height: 4px; border-radius: 2px; background: #93c5fd; margin-top: 10px; }
 #timeline-slider:focus-visible { outline: 2px solid #1d4ed8; outline-offset: 2px; }
 #timeline-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 13px; height: 20px; background: #3b82f6; clip-path: polygon(50% 0%, 100% 45%, 100% 100%, 0% 100%, 0% 45%); cursor: pointer; }
 #timeline-slider::-moz-range-thumb { width: 13px; height: 20px; background: #3b82f6; clip-path: polygon(50% 0%, 100% 45%, 100% 100%, 0% 100%, 0% 45%); cursor: pointer; border: none; }
 #timeline-label { position: absolute; left: 0; margin-right: 5px; font-size: 12px; font-weight: bold; white-space: nowrap; font-variant-numeric: tabular-nums; }
-#timeline-date-row { display: flex; align-items: center; justify-content: center; position: relative; direction: ltr; }
+#timeline-date-row { display: flex; align-items: center; justify-content: center; position: relative; direction: ltr; flex-wrap: wrap; }
+#timeline-label.status-msg { position: static; flex-basis: 100%; order: 2; text-align: center; margin: 2px 0 0; white-space: normal; }
 #timeline-date-nav { display: flex; align-items: center; background: #fef3c7; border: 1px solid #f59e0b; border-radius: 999px; overflow: hidden; }
 #timeline-date-nav button { background: none; border: none; font-size: 14px; font-weight: bold; cursor: pointer; padding: 2px 9px; min-height: 26px; line-height: 1; color: #92400e; user-select: none; -webkit-user-select: none; }
 #timeline-date-nav button:hover { background: #fde68a; }
@@ -5435,6 +5439,13 @@ function processEntries(entries) {
     var btnRow = document.getElementById('timeline-btn-row');
     var slider = document.getElementById('timeline-slider');
     var label = document.getElementById('timeline-label');
+    // Status messages (loading / no data) can be much longer than a time stamp,
+    // so they leave the absolute corner slot and take their own centered line
+    // below the date navigation instead of crowding it.
+    function setTimelineLabel(text, isStatus) {
+      label.textContent = text;
+      label.classList.toggle('status-msg', !!isStatus);
+    }
     var playBtn = document.getElementById('tl-play');
 
     var prevBtn = document.getElementById('tl-prev');
@@ -5469,6 +5480,7 @@ function processEntries(entries) {
       
       datePrevBtn.disabled = (d <= DAY_HISTORY_MIN_DATE);
       dateNextBtn.disabled = isViewingToday();
+      document.body.classList.toggle('viewing-past-date', !isViewingToday());
     }
     updateDateNav();
 
@@ -5485,7 +5497,7 @@ function processEntries(entries) {
           slider.value = sliderFromTime(now);
           
           if (isLiveMode) {
-            label.textContent = formatTime(now);
+            setTimelineLabel(formatTime(now));
           } else {
             enterHistoryMode(now);
           }
@@ -5515,14 +5527,14 @@ function processEntries(entries) {
         }
 
         if (isViewingToday()) {
-          label.textContent = 'אין התרעות היום'; 
+          setTimelineLabel('אין התרעות היום', true); 
           label.style.opacity = '0.7';
           // Ensure we don't accidentally display a stuck timestamp on an empty slider
           if (isLiveMode) {
-            label.textContent = formatTime(clampTime(Date.now()));
+            setTimelineLabel(formatTime(clampTime(Date.now())));
           }
         } else {
-          label.textContent = 'אין נתונים בתאריך זה';
+          setTimelineLabel('אין נתונים בתאריך זה', true);
           label.style.opacity = '0.5';
         }
       }
@@ -5551,7 +5563,7 @@ function processEntries(entries) {
       timelineMin = bounds.start;
       timelineMax = bounds.end;
       updateDateNav();
-      label.textContent = 'טוען...';
+      setTimelineLabel('טוען...', true);
       label.style.opacity = '0.5';
       ticksEl.innerHTML = '';
 
@@ -5619,7 +5631,7 @@ function processEntries(entries) {
       locationOpenedFromClosed = false; // 🚨 Reset the flag when explicitly opening timeline
       openSlimPanel();      updateDateNav();
       if (!dayHistoryReady) {
-        label.textContent = '\u05D8\u05D5\u05E2\u05DF...';
+        setTimelineLabel('\u05D8\u05D5\u05E2\u05DF...', true);
         label.style.opacity = '0.5';
         onDayHistoryReady = function() {
           onDayHistoryReady = null;
@@ -5901,7 +5913,7 @@ function processEntries(entries) {
   
   currentViewTime = time;
   var timeStr = formatTime(time);
-  label.textContent = timeStr;
+  setTimelineLabel(timeStr);
   label.style.opacity = '';
   
   var datePart = isViewingToday() ? '' : ' (' + formatDateLabel(timelineDate) + ')';
@@ -6070,7 +6082,12 @@ function processEntries(entries) {
         var b = bands[j];
         var leftPct = ((b.start - timelineMin) / range) * 100;
         var widthPct = ((b.end - b.start) / range) * 100;
-        if (widthPct < 0.1) widthPct = 0.1; // min visible width
+        // Keep markers inside the strip bounds: trim bands that spill past the
+        // day edges instead of relying on overflow clipping alone.
+        if (leftPct < 0) { widthPct += leftPct; leftPct = 0; }
+        if (leftPct + widthPct > 100) { widthPct = 100 - leftPct; }
+        if (widthPct <= 0) continue;
+        if (widthPct < 0.1) widthPct = Math.min(0.1, 100 - leftPct); // min visible width
         var span = document.createElement('span');
         span.style.left = leftPct + '%';
         span.style.width = widthPct + '%';
@@ -6170,7 +6187,7 @@ function processEntries(entries) {
         slider.value = Math.min(sliderFromTime(newTime), 999);
         currentViewTime = newTime;
         var timeStr = formatTime(newTime);
-        label.textContent = timeStr;
+        setTimelineLabel(timeStr);
         var datePart = isViewingToday() ? '' : ' (' + formatDateLabel(timelineDate) + ')';
         document.getElementById('historyTimeLabel').textContent = '\u05DE\u05E8\u05D0\u05D4 \u05D4\u05EA\u05E8\u05E2\u05D5\u05EA \u05DE\u05E9\u05E2\u05D4 ' + timeStr + datePart;
         reconstructStateAt(newTime);
