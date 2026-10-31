@@ -1147,7 +1147,8 @@ function resumePolling() {
 // Apply dark class before first paint to prevent flash
 try {
   var t = localStorage.getItem('oref-theme');
-  if (t === 'dark' || ((!t || t === 'auto') && window.matchMedia('(prefers-color-scheme: dark)').matches))
+  var devDefaultDark = (!t && location.hostname === 'dev.redmap.me');
+  if (t === 'dark' || devDefaultDark || ((!t || t === 'auto') && window.matchMedia('(prefers-color-scheme: dark)').matches))
     document.body.classList.add('dark');
 } catch(e) {}
 </script>
@@ -1590,7 +1591,11 @@ function apiFetch(endpoint) {
   var currentTheme = 'auto'; // 🚨 DEFINED HERE FIRST!
   
   try { var sl = localStorage.getItem('oref-map-lang'); if (VALID_LANGS.indexOf(sl) !== -1) currentLang = sl; } catch(e) {}
-  try { var st = localStorage.getItem('oref-theme'); if (VALID_THEMES.indexOf(st) !== -1) currentTheme = st; } catch(e) {}
+  try {
+    var st = localStorage.getItem('oref-theme');
+    if (VALID_THEMES.indexOf(st) !== -1) currentTheme = st;
+    else if (!st && location.hostname === 'dev.redmap.me') currentTheme = 'dark';
+  } catch(e) {}
 
   function resolveDarkMode() {
     if (currentTheme === 'dark') return true;
