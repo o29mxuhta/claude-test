@@ -109,15 +109,15 @@ html, body { height: 100%; font-family: Arial, sans-serif; }
   left: 10px;
   background: rgba(255, 255, 255, 0.92);
   border-radius: 4px;
-  padding: 4px 8px; 
+  padding: 3px 6px;
   box-shadow: 0 1px 4px rgba(0,0,0,0.15);
   z-index: 1000;
   direction: rtl;
   width: max-content; 
-  max-width: 300px; 
+  max-width: 235px;
 }
 #disclaimer-line {
-  font-size: 11px; 
+  font-size: 9px; 
   color: #d9d9d9;
   border-bottom: 1px solid rgba(0,0,0,0.06);
   margin-bottom: 2px;
@@ -135,8 +135,8 @@ body.viewing-past-date #dev-tools-container { display: none !important; }
   display: flex;
   align-items: center;       
   justify-content: center;   
-  gap: 5px;                  
-  font-size: 12px; 
+  gap: 4px;
+  font-size: 11px; 
   font-weight: 600;
 }
 #statusStats {
@@ -144,13 +144,13 @@ body.viewing-past-date #dev-tools-container { display: none !important; }
   flex-direction: column; 
   align-items: center; 
   text-align: center;  
-  gap: 0px; 
-  font-size: 11px; 
-  margin-top: 7px; 
+  gap: 0px;
+  font-size: 10px;
+  margin-top: 3px; 
   color: #666;
   line-height: 1.2;
 }
-#status .indicator { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-left: 2.5px; vertical-align: middle; }
+#status .indicator { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-left: 2.5px; vertical-align: middle; }
 .indicator-red    { background: #ff0000; animation: pulse 3s ease-in-out infinite; }
 .indicator-purple { background: #9922cc; animation: pulse 3s ease-in-out infinite; }
 .indicator-yellow { background: #ffcc00; animation: pulse 3s ease-in-out infinite; }
@@ -158,7 +158,7 @@ body.viewing-past-date #dev-tools-container { display: none !important; }
 .indicator-green  { background: #00cc00; }
 .indicator-err    { background: #999; }
 
-.status-emoji { font-size: 1.4em; vertical-align: middle; line-height: 1; display: inline-block; }
+.status-emoji { font-size: 1.1em; vertical-align: middle; line-height: 1; display: inline-block; }
 #lastAlertLink, #zoomAlertsLink { color: inherit; text-decoration: underline; cursor: pointer; }
 
 
@@ -448,9 +448,9 @@ body.f-ellipse #ellipse-stub { display: block !important; }
    7. RESPONSIVE DESIGN: MOBILE OVERRIDES
 ========================================= */
 @media (max-width: 600px) {
-  #status { top: 6px; left: 6px; padding: 3px 5px !important; max-width: 85vw !important; width: max-content !important; }
+  #status { top: 6px; left: 6px; padding: 3px 5px !important; max-width: 62vw !important; width: max-content !important; }
   #status-text { font-size: 10px !important; }
-  #statusStats { font-size: 11px !important; margin-top: 2px !important; }
+  #statusStats { font-size: 10px !important; margin-top: 2px !important; }
   .maplibregl-ctrl-top-left { top: 75px !important; left: 6px !important; }
 
   #right-panel { right: 12px; bottom: 24px; gap: 6px; }
@@ -2141,30 +2141,64 @@ var map = new maplibregl.Map({
 });
 
    // --- Map anchors: the view stays on the alert-polygon area ---------------
-   // Panning is clamped to the union bbox of every alert polygon in
-   // locations_polygons.json (verified against the live file on 2026-10-31:
+   // The camera CENTER is clamped to the _border outline shipped in
+   // locations_polygons.json (the exact outline of the alert-polygon union:
    // W 34.2675 Kerem Shalom, E 35.8954 Qeshet, S 29.4878 Eilat,
-   // N 33.3352 Majdal Shams) plus a small functional margin.
-   // This deliberately does NOT use a tight maxBounds: MapLibre responds to a
-   // narrow bounds box by raising the effective minZoom so the viewport always
-   // fits inside it, and on wide desktop screens that cuts the tall, narrow
-   // country down to a horizontal strip. Clamping only the camera CENTER keeps
-   // minZoom 6.8 and the whole-country zoom-out intact, while making it
-   // impossible to pan away into Egypt, Jordan, the sea or the empty tiles.
-   // buildPolygons re-derives the box from the real polygon data on every load,
+   // N 33.3352 Majdal Shams) plus a ~3 km margin so edge towns like Metulla,
+   // Eilat and Kerem Shalom stay fully viewable. A plain bbox is NOT enough:
+   // its NW and SE corners sit inside Lebanon and Jordan, so a bbox clamp let
+   // the camera park inside those countries. This deliberately does NOT use a
+   // tight maxBounds: MapLibre responds to a narrow bounds box by raising the
+   // effective minZoom so the viewport always fits inside it, and on wide
+   // desktop screens that cuts the tall, narrow country down to a horizontal
+   // strip. Clamping only the camera CENTER keeps minZoom 6.8 and the
+   // whole-country zoom-out intact, while making it impossible to pan away
+   // into Lebanon, Syria, Jordan, Egypt or the open sea.
+   // buildPolygons re-reads _border from the real polygon data on every load,
    // so the anchors track the polygons instead of drifting from them.
-   var ANCHOR_PAD = { w: 0.28, e: 0.27, s: 0.15, n: 0.22 };
-   var anchorBox = {
-     w: 34.2675 - ANCHOR_PAD.w,
-     e: 35.8954 + ANCHOR_PAD.e,
-     s: 29.4878 - ANCHOR_PAD.s,
-     n: 33.3352 + ANCHOR_PAD.n
-   };
+   var ANCHOR_MARGIN = 0.03; // degrees ~ 3 km of slack beyond the outline
+   var anchorRing = null;    // [[lng,lat], ...] from _border; null until data loads
+   // Tight bbox of the polygons, used as an outer guard and as the whole
+   // clamp until the polygon data arrives.
+   var anchorBox = { w: 34.2675, e: 35.8954, s: 29.4878, n: 33.3352 };
+   function pointInRing(lng, lat, ring) {
+     var inside = false;
+     for (var i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+       var xi = ring[i][0], yi = ring[i][1], xj = ring[j][0], yj = ring[j][1];
+       if ((yi > lat) !== (yj > lat) &&
+           lng < (xj - xi) * (lat - yi) / (yj - yi) + xi) inside = !inside;
+     }
+     return inside;
+   }
+   // Distance (degrees) to the nearest point on the ring; writes that point
+   // into out[0]/out[1].
+   function ringDistance(lng, lat, ring, out) {
+     var best = Infinity, bx = 0, by = 0;
+     for (var i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+       var ax = ring[j][0], ay = ring[j][1];
+       var dx = ring[i][0] - ax, dy = ring[i][1] - ay;
+       var len2 = dx * dx + dy * dy;
+       var t = len2 ? ((lng - ax) * dx + (lat - ay) * dy) / len2 : 0;
+       t = Math.max(0, Math.min(1, t));
+       var px = ax + t * dx, py = ay + t * dy;
+       var d2 = (lng - px) * (lng - px) + (lat - py) * (lat - py);
+       if (d2 < best) { best = d2; bx = px; by = py; }
+     }
+     out[0] = bx; out[1] = by;
+     return Math.sqrt(best);
+   }
+   var _nearest = [0, 0];
    function clampToAnchor(center) {
-     var lng = Math.min(Math.max(center.lng, anchorBox.w), anchorBox.e);
-     var lat = Math.min(Math.max(center.lat, anchorBox.s), anchorBox.n);
-     if (lng === center.lng && lat === center.lat) return null;
-     return [lng, lat];
+     var lng = Math.min(Math.max(center.lng, anchorBox.w - ANCHOR_MARGIN), anchorBox.e + ANCHOR_MARGIN);
+     var lat = Math.min(Math.max(center.lat, anchorBox.s - ANCHOR_MARGIN), anchorBox.n + ANCHOR_MARGIN);
+     if (!anchorRing) {
+       return (lng === center.lng && lat === center.lat) ? null : [lng, lat];
+     }
+     if (pointInRing(lng, lat, anchorRing) ||
+         ringDistance(lng, lat, anchorRing, _nearest) <= ANCHOR_MARGIN) {
+       return (lng === center.lng && lat === center.lat) ? null : [lng, lat];
+     }
+     return [_nearest[0], _nearest[1]];
    }
    map.on('move', function () {
      var clamped = clampToAnchor(map.getCenter());
@@ -3651,6 +3685,13 @@ function buildPolygons(data, onReady) {
 
     // Re-derive the pan anchors from the actual polygons (see the map-anchor
     // note above), so future polygon updates move the anchors with the data.
+    if (Array.isArray(data._border) && data._border.length > 2) {
+      anchorRing = Array.isArray(data._border[0][0]) ? data._border[0] : data._border;
+      // A center saved in localStorage before the outline existed self-heals
+      // now that the real shape is available.
+      var lateClamped = clampToAnchor(map.getCenter());
+      if (lateClamped) map.setCenter(lateClamped);
+    }
     var abx = { w: 180, e: -180, s: 90, n: -90 };
     features.forEach(function (f) {
       f.geometry.coordinates.forEach(function (ring) {
@@ -3662,12 +3703,7 @@ function buildPolygons(data, onReady) {
         });
       });
     });
-    anchorBox = {
-      w: abx.w - ANCHOR_PAD.w,
-      e: abx.e + ANCHOR_PAD.e,
-      s: abx.s - ANCHOR_PAD.s,
-      n: abx.n + ANCHOR_PAD.n
-    };
+    anchorBox = { w: abx.w, e: abx.e, s: abx.s, n: abx.n };
 
     polygonsGeoJSON.features = features;
     updateMapLibreSource();
@@ -7580,6 +7616,23 @@ function removeLocation(name) {
             }
         }
     }, true);
+})();
+</script>
+
+<a id="commit-badge" target="_blank" rel="noopener" style="display:none; position:fixed; bottom:3px; left:5px; z-index:900; font:10px/1.5 ui-monospace,Menlo,Consolas,monospace; direction:ltr; color:#555; background:rgba(255,255,255,0.45); padding:1px 5px; border-radius:4px; text-decoration:none; opacity:0.7;"></a>
+<script>
+// Shows the short SHA of the commit this exact build was deployed from. The
+// Pages build command stamps __COMMIT_SHA__ with $CF_PAGES_COMMIT_SHA at
+// deploy time, so the badge always names the served build - including branch
+// auto-publishes - and never a hardcoded value. Stays hidden when the
+// placeholder was not stamped (local dev, direct-upload without stamping).
+(function () {
+  var sha = '__COMMIT_SHA__';
+  if (!/^[0-9a-f]{40}$/.test(sha)) return;
+  var el = document.getElementById('commit-badge');
+  el.textContent = sha.slice(0, 7);
+  el.href = 'https://github.com/o29mxuhta/claude-test/commit/' + sha;
+  el.style.display = 'block';
 })();
 </script>
 </body>
