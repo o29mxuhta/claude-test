@@ -109,15 +109,15 @@ html, body { height: 100%; font-family: Arial, sans-serif; }
   left: 10px;
   background: rgba(255, 255, 255, 0.92);
   border-radius: 4px;
-  padding: 4px 8px; 
+  padding: 3px 6px;
   box-shadow: 0 1px 4px rgba(0,0,0,0.15);
   z-index: 1000;
   direction: rtl;
   width: max-content; 
-  max-width: 300px; 
+  max-width: 235px;
 }
 #disclaimer-line {
-  font-size: 11px; 
+  font-size: 9px; 
   color: #d9d9d9;
   border-bottom: 1px solid rgba(0,0,0,0.06);
   margin-bottom: 2px;
@@ -135,8 +135,8 @@ body.viewing-past-date #dev-tools-container { display: none !important; }
   display: flex;
   align-items: center;       
   justify-content: center;   
-  gap: 5px;                  
-  font-size: 12px; 
+  gap: 4px;
+  font-size: 11px; 
   font-weight: 600;
 }
 #statusStats {
@@ -144,13 +144,13 @@ body.viewing-past-date #dev-tools-container { display: none !important; }
   flex-direction: column; 
   align-items: center; 
   text-align: center;  
-  gap: 0px; 
-  font-size: 11px; 
-  margin-top: 7px; 
+  gap: 0px;
+  font-size: 10px;
+  margin-top: 3px; 
   color: #666;
   line-height: 1.2;
 }
-#status .indicator { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-left: 2.5px; vertical-align: middle; }
+#status .indicator { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-left: 2.5px; vertical-align: middle; }
 .indicator-red    { background: #ff0000; animation: pulse 3s ease-in-out infinite; }
 .indicator-purple { background: #9922cc; animation: pulse 3s ease-in-out infinite; }
 .indicator-yellow { background: #ffcc00; animation: pulse 3s ease-in-out infinite; }
@@ -158,7 +158,7 @@ body.viewing-past-date #dev-tools-container { display: none !important; }
 .indicator-green  { background: #00cc00; }
 .indicator-err    { background: #999; }
 
-.status-emoji { font-size: 1.4em; vertical-align: middle; line-height: 1; display: inline-block; }
+.status-emoji { font-size: 1.1em; vertical-align: middle; line-height: 1; display: inline-block; }
 #lastAlertLink, #zoomAlertsLink { color: inherit; text-decoration: underline; cursor: pointer; }
 
 
@@ -448,9 +448,9 @@ body.f-ellipse #ellipse-stub { display: block !important; }
    7. RESPONSIVE DESIGN: MOBILE OVERRIDES
 ========================================= */
 @media (max-width: 600px) {
-  #status { top: 6px; left: 6px; padding: 3px 5px !important; max-width: 85vw !important; width: max-content !important; }
+  #status { top: 6px; left: 6px; padding: 3px 5px !important; max-width: 62vw !important; width: max-content !important; }
   #status-text { font-size: 10px !important; }
-  #statusStats { font-size: 11px !important; margin-top: 2px !important; }
+  #statusStats { font-size: 10px !important; margin-top: 2px !important; }
   .maplibregl-ctrl-top-left { top: 75px !important; left: 6px !important; }
 
   #right-panel { right: 12px; bottom: 24px; gap: 6px; }
@@ -7616,6 +7616,23 @@ function removeLocation(name) {
             }
         }
     }, true);
+})();
+</script>
+
+<a id="commit-badge" target="_blank" rel="noopener" style="display:none; position:fixed; bottom:3px; left:5px; z-index:900; font:10px/1.5 ui-monospace,Menlo,Consolas,monospace; direction:ltr; color:#555; background:rgba(255,255,255,0.45); padding:1px 5px; border-radius:4px; text-decoration:none; opacity:0.7;"></a>
+<script>
+// Shows the short SHA of the commit this exact build was deployed from. The
+// Pages build command stamps __COMMIT_SHA__ with $CF_PAGES_COMMIT_SHA at
+// deploy time, so the badge always names the served build - including branch
+// auto-publishes - and never a hardcoded value. Stays hidden when the
+// placeholder was not stamped (local dev, direct-upload without stamping).
+(function () {
+  var sha = '__COMMIT_SHA__';
+  if (!/^[0-9a-f]{40}$/.test(sha)) return;
+  var el = document.getElementById('commit-badge');
+  el.textContent = sha.slice(0, 7);
+  el.href = 'https://github.com/o29mxuhta/claude-test/commit/' + sha;
+  el.style.display = 'block';
 })();
 </script>
 </body>
