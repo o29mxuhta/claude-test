@@ -1,6 +1,6 @@
 {
   "_source": "web.archive.org snapshot 2024-09-15 of https://www.tzevaadom.co.il/static/cities.json (third-party zone list); coord.csv data table from https://github.com/yuval-harpaz/alarms (third-party alert-data source repository)",
-  "_note": "Retired zone names absent from the current zone list. For 54 zones: retirement verified by zone id no longer present in the 2026-02 tzevaadom list, positions from the 2024-09 tzevaadom snapshot (third-party zone list). For 25 zones: name absent from the 2024-09 and 2026-02 tzevaadom lists (coord.csv carries no zone ids), positions from the coord.csv table in the yuval-harpaz/alarms data repository (exact-name match). \"container\" is the single current polygon containing that position; the site displays the historical alert on that current polygon - display association only, not the historical alert boundary. 12 renamed zones (identical zone id in the 2024-09 and 2026-02 lists) and 6 name variants resolve via HISTORICAL_ALIASES in index.html.",
+  "_note": "Retired zone names absent from the current zone list. For 54 zones: retirement verified by zone id no longer present in the 2026-02 tzevaadom list, positions from the 2024-09 tzevaadom snapshot (third-party zone list). For 25 zones: name absent from the 2024-09 and 2026-02 tzevaadom lists (coord.csv carries no zone ids), positions from the coord.csv table in the yuval-harpaz/alarms data repository (exact-name match). \"container\" is the single current polygon containing that position; the site displays the historical alert on that current polygon - display association only, not the historical alert boundary. 12 renamed zones (identical zone id in the 2024-09 and 2026-02 lists) and 6 name variants resolve via HISTORICAL_ALIASES in index.html. Additional 24 zones from the 2019-2022 window: name absent from the 2024-09 snapshot and the current list (retrieved 2026-10-31); positions from the coord.csv table in the yuval-harpaz/alarms data repository (exact-name match). One additional variant (שריגים - ליאון, tzevaadom zone id 354 in both the 2024-09 and current lists) resolves via HISTORICAL_ALIASES.",
   "zones": {
     "אבונוור": {
       "name": "אבו נוור",
@@ -475,6 +475,156 @@
       "lat": 31.448536,
       "lng": 34.578085,
       "container": "תקומה"
+    },
+    "אשקלון": {
+      "name": "אשקלון",
+      "lat": 31.6687885,
+      "lng": 34.5742523,
+      "container": "אשקלון - דרום"
+    },
+    "לקיהוהפזורה": {
+      "name": "לקיה והפזורה",
+      "lat": 31.3249,
+      "lng": 34.8662,
+      "container": "לקיה"
+    },
+    "חצוראשדוד": {
+      "name": "חצור אשדוד",
+      "lat": 31.772744,
+      "lng": 34.719366,
+      "container": "חצור"
+    },
+    "שגבשלוםוהפזורה": {
+      "name": "שגב שלום והפזורה",
+      "lat": 31.1984,
+      "lng": 34.8397,
+      "container": "שגב שלום"
+    },
+    "אבותלולוהפזורה": {
+      "name": "אבו-תלול והפזורה",
+      "lat": 31.1907,
+      "lng": 34.9161,
+      "container": "אבו תלול"
+    },
+    "אלסיידוהפזורה": {
+      "name": "אל-סייד והפזורה",
+      "lat": 31.281719,
+      "lng": 34.916298,
+      "container": "אל סייד"
+    },
+    "מולדה": {
+      "name": "מולדה",
+      "lat": 31.261071,
+      "lng": 34.975564,
+      "container": "סעווה"
+    },
+    "אוםבטיןוהפזורה": {
+      "name": "אום בטין והפזורה",
+      "lat": 31.2694,
+      "lng": 34.8811,
+      "container": "אום בטין"
+    },
+    "קריתחינוךמרחבים": {
+      "name": "קרית חינוך מרחבים",
+      "lat": 31.3138394,
+      "lng": 34.5749882,
+      "container": "מסלול"
+    },
+    "רהטוהפזורה": {
+      "name": "רהט והפזורה",
+      "lat": 31.4033,
+      "lng": 34.7582,
+      "container": "רהט"
+    },
+    "תראביןאצאנעופזורה": {
+      "name": "תראבין א-צאנע ופזורה",
+      "lat": 31.345481,
+      "lng": 34.739126,
+      "container": "תארבין"
+    },
+    "הרצליהפיתוח": {
+      "name": "הרצליה - פיתוח",
+      "lat": 32.1772438548416,
+      "lng": 34.8094640399948,
+      "container": "הרצליה - מערב"
+    },
+    "מעלהשומרון": {
+      "name": "מעלה שומרון",
+      "lat": 32.1654,
+      "lng": 35.0697,
+      "container": "קרני שומרון"
+    },
+    "אבוקרינאתוהפזורה": {
+      "name": "אבו קרינאת והפזורה",
+      "lat": 31.1031,
+      "lng": 34.952,
+      "container": "אבו קרינאת"
+    },
+    "קצראסירוהפזורה": {
+      "name": "קצר-א-סיר והפזורה",
+      "lat": 31.0865,
+      "lng": 34.9979,
+      "container": "קסר א-סר"
+    },
+    "מועצהאזוריתדרוםהשרון": {
+      "name": "מועצה אזורית דרום השרון",
+      "lat": 32.133539,
+      "lng": 34.910989,
+      "container": "מרכז אזורי דרום השרון"
+    },
+    "ערוערערערהבנגב": {
+      "name": "ערוער - ערערה בנגב",
+      "lat": 31.160927,
+      "lng": 35.019757,
+      "container": "ערערה בנגב"
+    },
+    "כרכור": {
+      "name": "כרכור",
+      "lat": 32.4728028,
+      "lng": 34.9742001,
+      "container": "פרדס חנה כרכור"
+    },
+    "ירושליםצפוןואלונים": {
+      "name": "ירושלים - צפון ואלונים",
+      "lat": 31.7837385790528,
+      "lng": 35.2178921418203,
+      "container": "ירושלים - מרכז"
+    },
+    "צורן": {
+      "name": "צורן",
+      "lat": 32.277644,
+      "lng": 34.919297,
+      "container": "קדימה צורן"
+    },
+    "דריגאת": {
+      "name": "דריג'את",
+      "lat": 31.301885,
+      "lng": 35.076793,
+      "container": "תל ערד"
+    },
+    "כסייפהוהפזורה": {
+      "name": "כסייפה והפזורה",
+      "lat": 31.2347,
+      "lng": 35.0681,
+      "container": "כסייפה"
+    },
+    "תלערדואלפורה": {
+      "name": "תל ערד ואל פורה",
+      "lat": 31.2782985,
+      "lng": 35.1266529,
+      "container": "תל ערד"
+    },
+    "כוחלהמכחול": {
+      "name": "כוחלה מכחול",
+      "lat": 31.287112,
+      "lng": 35.048572,
+      "container": "מרעית"
+    },
+    "שריגיםליאון": {
+      "name": "שריגים - ליאון",
+      "lat": 31.6766,
+      "lng": 34.9353,
+      "container": "שריגים - לי-און"
     }
   }
 }
