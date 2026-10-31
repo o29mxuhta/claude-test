@@ -198,6 +198,56 @@ async function handleIngest(request, env) {
   return new Response(null, { status: 204 });
 }
 
+
+// --- History entry normalization (rolling + extended documented shapes) ---
+//
+// The relay's /api2/alarms-history route aliases the rolling
+// AlertsHistory.json feed. Documented shapes (docs/architecture.md:34,42):
+//   rolling:   { data: "location", alertDate: "YYYY-MM-DD HH:MM:SS", title, category, desc? }
+//   extended:  { data: "location", alertDate: "YYYY-MM-DDTHH:MM:SS", category_desc, rid, ... }
+// Only these documented shapes are mapped. The only transformation is
+// normalizing the rolling space separator to 'T' so window comparison and the
+// archive layout stay ISO. Documented fields are copied verbatim - no rid for
+// rolling records (they carry none) and no authored category text. A missing
+// rolling title falls back to the prefix of the source's own desc field, the
+// same transformation the production UI applies (web/index.html
+// processHistoryEntry). Records with neither title nor desc are archived
+// without category_desc (the R2 timeline currently skips such entries; known
+// partial result, see review). Records outside the documented shape - e.g.
+// non-string data (the relay tolerates array data), a non-numeric extended
+// rid, an invalid calendar date - are rejected, and any rejection fails the
+// whole window closed (unprocessed, no marker) rather than archiving a
+// silently partial window. Unknown extra source fields are not archived.
+
+function normalizeHistoryEntry(e) {
+  if (!e || typeof e !== 'object' || Array.isArray(e)) return null;
+  if (typeof e.data !== 'string' || !e.data.trim()) return null;
+
+  const rawDate = typeof e.alertDate === 'string' ? e.alertDate.trim() : '';
+  const alertDate = rawDate.indexOf('T') === -1 ? rawDate.replace(' ', 'T') : rawDate;
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/.exec(alertDate);
+  if (!m) return null;
+  const year = +m[1], month = +m[2], day = +m[3], hour = +m[4], minute = +m[5], second = +m[6];
+  if (month < 1 || month > 12 || hour > 23 || minute > 59 || second > 59) return null;
+  if (day < 1 || day > new Date(Date.UTC(year, month, 0)).getUTCDate()) return null;
+
+  const descPrefix = (typeof e.desc === 'string' && e.desc.trim())
+    ? e.desc.split('-')[0].trim() : '';
+  const categoryDesc =
+    (typeof e.category_desc === 'string' && e.category_desc.trim()) ? e.category_desc :
+    (typeof e.title === 'string' && e.title.trim()) ? e.title :
+    descPrefix || null;
+
+  const out = { data: e.data, alertDate };
+  if (categoryDesc) out.category_desc = categoryDesc;
+  if (typeof e.rid === 'number') out.rid = e.rid;              // extended only, verbatim
+  else if ('rid' in e) return null;                            // documented rid is numeric
+  if (typeof e.category === 'number') out.category = e.category; // rolling only, verbatim
+  else if ('category' in e) return null;                       // documented category is numeric
+  if (typeof e.desc === 'string' && e.desc) out.desc = e.desc;   // rolling only, verbatim
+  return out;
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -223,32 +273,70 @@ export default {
 
     console.log(`Timeslot: ${timeslot}, window: [${windowStartStr}, ${windowEndStr}), alertCheck: ${isAlertCheck}`);
 
-    // Check if this timeslot was already processed
-    const marker = await env.HISTORY_BUCKET.head(`meta/${timeslot}`);
+    // Check this timeslot's marker VALUE, not just existence: the marker is a
+    // small state machine, and 'pending-quiet' / 'error' are non-final states
+    // that must be retried while this window's normal attempts remain.
+    //   '<n>' (n >= 1)      final: n records archived
+    //   'pending-quiet'     non-final: trustworthy empty answer so far; retry
+    //   'error'             non-final: last attempt failed; retry
+    //   'quiet-unconfirmed' final: latest trustworthy answer quiet with no
+    //                       subsequent handled failure; coverage unverified,
+    //                       NOT a verified zero
+    //   (missing)           never attempted / never completed
+    const markerObj = await env.HISTORY_BUCKET.get(`meta/${timeslot}`);
+    const markerValue = markerObj ? (await markerObj.text()).trim() : null;
 
-    // Alert-check run: notify if missed, always clean up old markers
+    // Alert-check run: final classification + cleanup of old markers.
+    // Missing or 'error' means the window never reached a result in any of its
+    // attempts: a true miss, notified. 'pending-quiet' becomes the final
+    // 'quiet-unconfirmed' state - the feed answered empty on every attempt,
+    // which is a valid real-time "nothing active" answer but cannot verify a
+    // past window; it is classified, not completed, and not a miss.
     if (isAlertCheck) {
-      if (!marker) {
+      if (markerValue === null || markerValue === 'error') {
         console.log(`Alert check: timeslot ${timeslot} was NOT processed after all attempts`);
         ctx.waitUntil(sendPushover(
           env,
           'redmap ingestion: missed window',
           `Window ${timeslot} [${windowStartStr}, ${windowEndStr}) was not processed after all attempts.`
         ));
+      } else if (markerValue === 'pending-quiet') {
+        await env.HISTORY_BUCKET.put(`meta/${timeslot}`, 'quiet-unconfirmed', {
+          httpMetadata: { contentType: 'text/plain' },
+        });
+        console.log(`Alert check: timeslot ${timeslot} classified quiet-unconfirmed (latest trustworthy answer quiet, no subsequent handled failure; coverage unverified)`);
+      } else if (markerValue === 'quiet-unconfirmed') {
+        console.log(`Alert check: timeslot ${timeslot} already classified quiet-unconfirmed (final; inferred, not verified)`);
       } else {
-        console.log(`Alert check: timeslot ${timeslot} OK`);
+        console.log(`Alert check: timeslot ${timeslot} OK (${markerValue} entries)`);
       }
       ctx.waitUntil(cleanupOldMarkers(env));
       return;
     }
 
-    if (marker) {
-      console.log(`Timeslot ${timeslot} already processed`);
+    // Only a completed window is skipped. 'pending-quiet' and 'error' are
+    // retried while this window's normal attempts remain: a later attempt may
+    // find records that were not visible yet, and a real error after a quiet
+    // answer must not end up classified as quiet.
+    if (markerValue !== null && markerValue !== 'pending-quiet' && markerValue !== 'error') {
+      console.log(`Timeslot ${timeslot} already processed (${markerValue} entries)`);
       return;
     }
 
+    // Any failure after a 'pending-quiet' answer downgrades it to 'error', so
+    // a stale quiet answer can never survive a later real failure into the
+    // final classification.
+    const failAttempt = async () => {
+      if (markerValue === 'pending-quiet') {
+        await env.HISTORY_BUCKET.put(`meta/${timeslot}`, 'error', {
+          httpMetadata: { contentType: 'text/plain' },
+        });
+      }
+    };
+
     // Fetch from the history relay (single attempt, cron cadence provides retries)
     let entries;
+    let upstreamStatus = '';
     try {
       const headers = {};
       // RELAY_KEY authenticates the worker to the upstream history relay, if the
@@ -264,47 +352,30 @@ export default {
         console.error(`Error Fetch URL: ${env.HISTORY_PROXY_URL}/api2/alarms-history`);
         console.error(`FETCH failed: HTTP ${resp.status}: ${body.slice(0, 200)}`);
         console.error(`Response headers: ${JSON.stringify(respHeaders)}`);
+        await failAttempt();
         return;
       }
-      const text = (await resp.text()).replace(/^﻿/, '');
-      entries = JSON.parse(text);
+      const text = (await resp.text()).replace(/^\uFEFF/, '');
+      const parsed = JSON.parse(text);
+      if (!Array.isArray(parsed)) throw new Error('payload is not an array');
+      entries = parsed.map(normalizeHistoryEntry);
+      const badIndex = entries.findIndex(e => e === null);
+      if (badIndex !== -1) {
+        console.error(`Malformed history record at index ${badIndex}: ${JSON.stringify(parsed[badIndex]).slice(0, 200)}`);
+        await failAttempt();
+        return; // fail closed: the next cron run retries this window
+      }
       const dates = entries.map(e => e.alertDate).filter(Boolean).sort();
       console.log(`Fetched ${entries.length} entries, API range: ${dates[0] || 'n/a'} – ${dates[dates.length - 1] || 'n/a'}`);
-
-      // Empty-success guard: an HTTP 200 with zero entries is ambiguous — it
-      // is either a genuinely quiet period or a broken upstream feed. Writing
-      // the window marker on a broken feed would silently drop real alerts,
-      // so cross-check against the rolling 50-minute feed before believing
-      // an empty result.
-      if (entries.length === 0) {
-        const crossCheck = await fetch(`${env.HISTORY_PROXY_URL}/api2/history`, { headers }).catch(() => null);
-        if (crossCheck && crossCheck.ok) {
-          const crossText = (await crossCheck.text()).replace(/^﻿/, '');
-          let crossEntries = [];
-          try { crossEntries = JSON.parse(crossText); } catch { crossEntries = []; }
-          const inWindow = crossEntries.filter(e => {
-            const t = (e.alertDate || '').replace(' ', 'T');
-            return t >= windowStartStr && t < windowEndStr;
-          });
-          if (inWindow.length > 0) {
-            console.error(`alarms-history returned [] but history feed has ${inWindow.length} entries in window — treating as feed failure, will retry`);
-            ctx.waitUntil(sendPushover(
-              env,
-              'redmap ingestion: empty feed mismatch',
-              `alarms-history was empty while the history feed showed ${inWindow.length} entries for ${timeslot}. Window left unprocessed for retry.`
-            ));
-            return; // no marker: the next cron run retries this window
-          }
-        }
-      }
+      upstreamStatus = resp.headers.get('X-Upstream-Status') || '';
     } catch (e) {
       console.error(`Fetch exception: ${e.message}`);
+      await failAttempt();
       return;
     }
 
     const filtered = entries
-      .filter(e => e.alertDate >= windowStartStr && e.alertDate < windowEndStr)
-      .map(e => ({ data: e.data, alertDate: e.alertDate, category_desc: e.category_desc, rid: e.rid }));
+      .filter(e => e.alertDate >= windowStartStr && e.alertDate < windowEndStr);
 
     filtered.sort((a, b) => a.alertDate < b.alertDate ? -1 : a.alertDate > b.alertDate ? 1 : 0);
 
@@ -329,7 +400,28 @@ export default {
       console.log(`Wrote ${d}.jsonl: ${dateEntries.length} new + ${existingText.length} bytes existing`);
     }
 
-    // Write timeslot marker
+    // Write the timeslot marker.
+    //  - Records archived: the marker is the count (final for this window).
+    //  - No records in this window: an empty window is INFERRED, never
+    //    verified - a valid real-time "nothing active" answer cannot prove a
+    //    past window was quiet, and a non-empty answer elsewhere in the feed
+    //    does not prove it either. The window becomes 'pending-quiet' and is
+    //    retried while its normal attempts remain; the alert-check assigns
+    //    the final 'quiet-unconfirmed' classification. A fully empty answer
+    //    without the relay's confirmed upstream 200 is not trustworthy even
+    //    that far: the attempt fails and the window is retried.
+    if (filtered.length === 0) {
+      if (entries.length === 0 && upstreamStatus !== '200') {
+        console.error(`Empty payload without confirmed upstream 200 (got '${upstreamStatus || 'none'}') - window ${timeslot} left unprocessed`);
+        await failAttempt();
+        return;
+      }
+      await env.HISTORY_BUCKET.put(`meta/${timeslot}`, 'pending-quiet', {
+        httpMetadata: { contentType: 'text/plain' },
+      });
+      console.log(`Marker written: meta/${timeslot} (pending-quiet)`);
+      return;
+    }
     await env.HISTORY_BUCKET.put(`meta/${timeslot}`, `${filtered.length}`, {
       httpMetadata: { contentType: 'text/plain' },
     });
