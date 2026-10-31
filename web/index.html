@@ -3202,11 +3202,15 @@ function todayDateStr() {
     "קידר": "קדר",
     "קרייתטבעוןביתזייד": "קריית טבעון - בית זייד",
     "שבלי": "שיבלי אום אלג'נם",
+    "שריגיםליאון": "שריגים - לי-און",  // variant of tzevaadom zone id 354 (שריגים - לי-און in both the 2024-09 and current lists)
     "שומרת": "שמרת"
   };
   // Retired zones (id gone from the 2026-02 list) mapped to the single current polygon that CONTAINS their
   // last known position (2024-09 third-party snapshot list). Deterministic display association only;
   // not zone identity, not the historical alert boundary.
+  // 2019-2022 window names (including wider historical zones such as village+פזורה and pre-split
+  // city names) follow the same rule: the single current polygon containing the source position
+  // (coord.csv, exact-name match); deterministic display association only.
   var HISTORICAL_CONTAINERS = {
     "אבונוור": "קדר דרום",
     "אוםאלגנם": "שיבלי אום אלג'נם",
@@ -3286,7 +3290,32 @@ function todayDateStr() {
     "שהם": "שוהם",
     "שערהגיא": "מסילת ציון",
     "תעשיוןחצב": "נחשונים",
-    "תקומהוחוותיזרעם": "תקומה"
+    "תקומהוחוותיזרעם": "תקומה",
+    // --- 2019-2022 window (coord.csv positions, exact-name match; same display-association rule)
+    "אשקלון": "אשקלון - דרום",
+    "לקיהוהפזורה": "לקיה",
+    "חצוראשדוד": "חצור",
+    "שגבשלוםוהפזורה": "שגב שלום",
+    "אבותלולוהפזורה": "אבו תלול",
+    "אלסיידוהפזורה": "אל סייד",
+    "מולדה": "סעווה",
+    "אוםבטיןוהפזורה": "אום בטין",
+    "קריתחינוךמרחבים": "מסלול",
+    "רהטוהפזורה": "רהט",
+    "תראביןאצאנעופזורה": "תארבין",
+    "הרצליהפיתוח": "הרצליה - מערב",
+    "מעלהשומרון": "קרני שומרון",
+    "אבוקרינאתוהפזורה": "אבו קרינאת",
+    "קצראסירוהפזורה": "קסר א-סר",
+    "מועצהאזוריתדרוםהשרון": "מרכז אזורי דרום השרון",
+    "ערוערערערהבנגב": "ערערה בנגב",
+    "כרכור": "פרדס חנה כרכור",
+    "ירושליםצפוןואלונים": "ירושלים - מרכז",
+    "צורן": "קדימה צורן",
+    "דריגאת": "תל ערד",
+    "כסייפהוהפזורה": "כסייפה",
+    "תלערדואלפורה": "תל ערד",
+    "כוחלהמכחול": "מרעית"
   };
   var COLORS = { red: '#ff0000', brown: '#8b4513', purple: '#9922cc', yellow: '#ffcc00', green: '#00cc00', hazmat: '#009999', earthquake: '#ff8800' }; // hazmat/earthquake colors PROPOSED - pending Gil's pick
   // --- Sound ---
