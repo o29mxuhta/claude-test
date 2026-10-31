@@ -5068,31 +5068,6 @@ function maybeZoomToEvent() {
   function stripBom(text) {
     return text.replace(/^\ufeff/, '');
   }
-
- const WORKER_INGEST_URL = "/api/ingest"; // old collector domain is dead (NXDOMAIN); relay via Pages Function -> redmap-ingestion worker
-
-function forwardAlertToCache(alertData) {
-  if (!alertData) return;
-
-  // Map the HFC data to the format our Worker expects.
-  // HFC alerts typically use 'data' for the array of cities and 'title' for the threat.
-  const payload = {
-    id: alertData.id || crypto.randomUUID(),
-    zone: alertData.data ? alertData.data[0] : "Unknown Zone", 
-    cities: alertData.data || [], 
-    timestamp: new Date().toISOString(),
-    threat: alertData.title || "Alert"
-  };
-
-  // Fire and forget (POST to Cloudflare)
-  fetch(WORKER_INGEST_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  }).catch(function(err) {
-    console.error("❌ Failed to push to Cloudflare Cache:", err);
-  });
-}
    
 var feedHealth = {
   alerts: { checkedAt: 0, receivedAt: 0, error: '' },
@@ -5188,7 +5163,6 @@ function renderFeedHealth() {
         var alertArray = Array.isArray(result.data) ? result.data : [result.data];
         alertArray.forEach(function(alert) {
           processLiveAlert(alert);
-          forwardAlertToCache(alert);
         });
       })
       .catch(function(err) {

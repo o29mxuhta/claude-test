@@ -15,7 +15,7 @@ Set up usage monitoring first. Check the current R2 and Workers tier limits (htt
 5. Read back the stored data: list the bucket, compare object count and sizes against the local files, and fetch-sample a busy day and a quiet day. Do not bind before read-back matches.
 6. Bind the Pages project: Settings > Bindings > Add > R2 bucket, variable name HISTORY_BUCKET, bucket `oref-history`, for BOTH production and preview, then redeploy: Pages binding changes take effect only after a redeploy (https://developers.cloudflare.com/pages/functions/bindings/). Verify the actually-served deployment afterward.
 7. Canary the collector feed: at the next real alert, compare `/api/day-history?date=<today>` against the live feed. Until this check passes on a non-empty feed, treat the collector as unverified.
-8. Optional, deferred until abuse controls are reviewed: set the Pages variable `INGEST_WORKER_URL` to enable the browser-ingest relay. That endpoint is unauthenticated by design and writes only to the untrusted `live/` prefix.
+8. RETIRED 2026-10-31: the browser-ingest relay was removed after the abuse-control review (Pages variable `INGEST_WORKER_URL`, `functions/api/ingest.js`, `forwardAlertToCache` in web/index.html, and the worker's POST /ingest route). Nothing consumed the untrusted `live/` prefix. Do not re-add a public write path without authentication and rate limiting.
 
 ## Cutoff and rollback
 
