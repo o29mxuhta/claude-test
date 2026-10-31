@@ -9,13 +9,6 @@
 //
 // Day-file layout mirrors functions/api/day-history.js: `<date>.jsonl`,
 // comma-terminated JSONL, events from 23:xx belong to the NEXT day's file.
-//
-// Additionally exposes POST /ingest: browsers forward live alerts here
-// (see web/index.html forwardAlertToCache). These are written to a separate
-// `live/` holding prefix, NEVER to the canonical day files: the endpoint is
-// unauthenticated by design (any browser can reach it), so its data must be
-// treated as untrusted until reviewed. Merging live/ into canonical history
-// is a separate, explicit step.
 
 function toIsraelTimeStr(timestampMs) {
   return new Intl.DateTimeFormat('sv-SE', {
@@ -180,83 +173,6 @@ async function recordFinalCoverage(env, windowStartMs, markerValue) {
   console.warn('Coverage update conflict budget exhausted');
 }
 
-// --- POST /ingest: browser-forwarded live alerts into the live/ holding area ---
-
-const INGEST_MAX_CITIES = 50;
-const INGEST_MAX_ENTRIES_PER_RUN = 200;
-const LIVE_FILE_CAP_BYTES = 5 * 1024 * 1024;
-
-function minuteKey(alertDateStr) {
-  return alertDateStr.slice(0, 16);
-}
-
-async function handleIngest(request, env) {
-  let payload;
-  try {
-    payload = await request.json();
-  } catch {
-    return new Response('Bad Request: JSON body required', { status: 400 });
-  }
-
-  const cities = Array.isArray(payload && payload.cities) ? payload.cities : [];
-  const threat = typeof (payload && payload.threat) === 'string' ? payload.threat.slice(0, 200) : '';
-  if (!cities.length || !threat) {
-    return new Response('Bad Request: cities[] and threat required', { status: 400 });
-  }
-
-  // Client clocks are untrusted: clamp to server time +/- 10 minutes.
-  const nowMs = Date.now();
-  let tsMs = Date.parse(payload.timestamp || '');
-  if (isNaN(tsMs) || Math.abs(tsMs - nowMs) > 10 * 60 * 1000) tsMs = nowMs;
-  const alertDate = toIsraelTimeStr(tsMs);
-  const dateKey = r2DateKey(alertDate);
-  const objKey = `live/${dateKey}.jsonl`;
-
-  const existing = await env.HISTORY_BUCKET.get(objKey);
-  const existingText = existing ? await existing.text() : '';
-  if (existingText.length > LIVE_FILE_CAP_BYTES) {
-    return new Response('live file full', { status: 507 });
-  }
-
-  // Dedupe against what is already held: same city, minute and threat.
-  const seen = new Set();
-  for (const line of existingText.split('\n')) {
-    const trimmed = line.trim().replace(/,$/, '');
-    if (!trimmed) continue;
-    try {
-      const e = JSON.parse(trimmed);
-      seen.add(`${e.data}|${minuteKey(e.alertDate)}|${e.category_desc}`);
-    } catch { /* ignore damaged lines */ }
-  }
-
-  let appended = 0;
-  let out = '';
-  for (const rawCity of cities.slice(0, INGEST_MAX_CITIES)) {
-    if (typeof rawCity !== 'string' || !rawCity) continue;
-    if (appended >= INGEST_MAX_ENTRIES_PER_RUN) break;
-    const entry = {
-      data: rawCity,
-      alertDate,
-      category_desc: threat,
-      rid: 0, // browser-forwarded alerts carry no oref rid
-    };
-    const key = `${entry.data}|${minuteKey(entry.alertDate)}|${entry.category_desc}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out += JSON.stringify(entry) + ',\n';
-    appended++;
-  }
-
-  if (appended > 0) {
-    await env.HISTORY_BUCKET.put(objKey, existingText + out, {
-      httpMetadata: { contentType: 'application/jsonl' },
-    });
-  }
-  console.log(`ingest: ${appended} new entries into ${objKey} (${cities.length} cities offered)`);
-  return new Response(null, { status: 204 });
-}
-
-
 // --- History entry normalization (rolling + extended documented shapes) ---
 //
 // The relay's /api2/alarms-history route aliases the rolling
@@ -309,9 +225,6 @@ function normalizeHistoryEntry(e) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (url.pathname === '/ingest' && request.method === 'POST') {
-      return handleIngest(request, env);
-    }
     if (url.pathname === '/health') {
       return new Response('ok', { status: 200 });
     }
@@ -399,7 +312,7 @@ export default {
     try {
       const headers = {};
       // RELAY_KEY authenticates the worker to the upstream history relay, if the
-      // relay requires it. Unrelated to this worker's own /ingest endpoint.
+      // relay requires it.
       if (env.RELAY_KEY) headers['X-Ingest-Key'] = env.RELAY_KEY;
       const resp = await fetch(
         `${env.HISTORY_PROXY_URL}/api2/alarms-history`,
