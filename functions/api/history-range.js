@@ -23,6 +23,7 @@ export async function onRequestOptions() {
 
 export async function onRequestGet(context) {
   let minDate = DEFAULT_MIN_DATE;
+  let coverage;
   if (context.env.HISTORY_BUCKET) {
     try {
       const obj = await context.env.HISTORY_BUCKET.get('meta/history-range.json');
@@ -30,6 +31,7 @@ export async function onRequestGet(context) {
         const cfg = JSON.parse(await obj.text());
         if (/^\d{4}-\d{2}-\d{2}$/.test(cfg.minDate || '')) {
           minDate = cfg.minDate;
+          coverage = cfg.coverage;
         }
       }
     } catch (err) {
@@ -37,5 +39,5 @@ export async function onRequestGet(context) {
       console.warn(`history-range: failed to read meta/history-range.json: ${err}`);
     }
   }
-  return jsonResponse(JSON.stringify({ minDate }));
+  return jsonResponse(JSON.stringify({ minDate, coverage }));
 }

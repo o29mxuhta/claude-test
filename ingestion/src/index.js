@@ -122,6 +122,64 @@ async function cleanupOldMarkers(env) {
   console.log(`Cleanup: deleted ${deleted} old markers`);
 }
 
+// Coverage metadata only. Canonical events and original markers are untouched.
+const COVERAGE_RANGE_KEY = 'meta/history-range.json';
+const COVERAGE_CAP_BYTES = 16 * 1024;
+const COVERAGE_MAX_SLOTS = 16000; // 166 days 16 hours, no pruning
+const QUARTER_MS = 15 * 60 * 1000;
+
+async function recordFinalCoverage(env, windowStartMs, markerValue) {
+  // Local-time marker keys cannot distinguish the repeated DST hour. Do not
+  // certify either occurrence from that ambiguous marker.
+  const local = toIsraelTimeStr(windowStartMs).slice(0, 16);
+  const ambiguous = [-3600000, 3600000].some(delta =>
+    toIsraelTimeStr(windowStartMs + delta).slice(0, 16) === local);
+  const code = ambiguous ? '?' : /^\d+$/.test(markerValue || '') && Number(markerValue) > 0 ? 'a'
+    : markerValue === 'quiet-unconfirmed' || markerValue === 'pending-quiet' ? 'q'
+    : markerValue === null || markerValue === 'error' ? 'f' : '?';
+  const slot = Math.floor(windowStartMs / QUARTER_MS);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const obj = await env.HISTORY_BUCKET.get(COVERAGE_RANGE_KEY);
+      // Never invent minDate or create a replacement if the existing range is
+      // missing/broken. A metadata failure must not affect event archival.
+      if (!obj) { console.warn('Coverage unavailable: range metadata missing'); return; }
+      const cfg = JSON.parse(await obj.text());
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(cfg.minDate || '')) return;
+      const old = cfg.coverage;
+      if (old && (old.v !== 1 || !Number.isSafeInteger(old.start) ||
+          typeof old.states !== 'string' || !/^[aqf?]*$/.test(old.states))) return;
+      const start = old ? old.start : slot;
+      if (slot < start) return; // no backfill or expansion into older history
+      const index = slot - start;
+      const capped = index >= COVERAGE_MAX_SLOTS;
+      if (capped && old && old.capped) return;
+      let states = old ? old.states : '';
+      if (!capped) {
+        if (index < states.length && states[index] === code) return;
+        states = states.padEnd(index + 1, '?');
+        states = states.slice(0, index) + code + states.slice(index + 1);
+      }
+      cfg.coverage = {v: 1, start, states, asOf: capped && old ? old.asOf : new Date().toISOString()};
+      if (capped) cfg.coverage.capped = true;
+      const body = JSON.stringify(cfg);
+      if (new TextEncoder().encode(body).length > COVERAGE_CAP_BYTES) {
+        console.warn('Coverage metadata cap reached'); return;
+      }
+      const saved = await env.HISTORY_BUCKET.put(COVERAGE_RANGE_KEY, body, {
+        onlyIf: {etagMatches: obj.etag}, storageClass: 'Standard',
+        httpMetadata: {contentType: 'application/json'},
+      });
+      if (saved) return;
+      // Failed conditional writes count as operations. At most three attempts.
+    } catch (err) {
+      console.warn('Coverage metadata update failed', String(err));
+      return; // no automatic retry on network/error with uncertain write result
+    }
+  }
+  console.warn('Coverage update conflict budget exhausted');
+}
+
 // --- POST /ingest: browser-forwarded live alerts into the live/ holding area ---
 
 const INGEST_MAX_CITIES = 50;
@@ -310,6 +368,7 @@ export default {
       } else {
         console.log(`Alert check: timeslot ${timeslot} OK (${markerValue} entries)`);
       }
+      await recordFinalCoverage(env, windowStartMs, markerValue);
       ctx.waitUntil(cleanupOldMarkers(env));
       return;
     }
