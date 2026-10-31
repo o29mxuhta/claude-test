@@ -2141,30 +2141,64 @@ var map = new maplibregl.Map({
 });
 
    // --- Map anchors: the view stays on the alert-polygon area ---------------
-   // Panning is clamped to the union bbox of every alert polygon in
-   // locations_polygons.json (verified against the live file on 2026-10-31:
+   // The camera CENTER is clamped to the _border outline shipped in
+   // locations_polygons.json (the exact outline of the alert-polygon union:
    // W 34.2675 Kerem Shalom, E 35.8954 Qeshet, S 29.4878 Eilat,
-   // N 33.3352 Majdal Shams) plus a small functional margin.
-   // This deliberately does NOT use a tight maxBounds: MapLibre responds to a
-   // narrow bounds box by raising the effective minZoom so the viewport always
-   // fits inside it, and on wide desktop screens that cuts the tall, narrow
-   // country down to a horizontal strip. Clamping only the camera CENTER keeps
-   // minZoom 6.8 and the whole-country zoom-out intact, while making it
-   // impossible to pan away into Egypt, Jordan, the sea or the empty tiles.
-   // buildPolygons re-derives the box from the real polygon data on every load,
+   // N 33.3352 Majdal Shams) plus a ~3 km margin so edge towns like Metulla,
+   // Eilat and Kerem Shalom stay fully viewable. A plain bbox is NOT enough:
+   // its NW and SE corners sit inside Lebanon and Jordan, so a bbox clamp let
+   // the camera park inside those countries. This deliberately does NOT use a
+   // tight maxBounds: MapLibre responds to a narrow bounds box by raising the
+   // effective minZoom so the viewport always fits inside it, and on wide
+   // desktop screens that cuts the tall, narrow country down to a horizontal
+   // strip. Clamping only the camera CENTER keeps minZoom 6.8 and the
+   // whole-country zoom-out intact, while making it impossible to pan away
+   // into Lebanon, Syria, Jordan, Egypt or the open sea.
+   // buildPolygons re-reads _border from the real polygon data on every load,
    // so the anchors track the polygons instead of drifting from them.
-   var ANCHOR_PAD = { w: 0.28, e: 0.27, s: 0.15, n: 0.22 };
-   var anchorBox = {
-     w: 34.2675 - ANCHOR_PAD.w,
-     e: 35.8954 + ANCHOR_PAD.e,
-     s: 29.4878 - ANCHOR_PAD.s,
-     n: 33.3352 + ANCHOR_PAD.n
-   };
+   var ANCHOR_MARGIN = 0.03; // degrees ~ 3 km of slack beyond the outline
+   var anchorRing = null;    // [[lng,lat], ...] from _border; null until data loads
+   // Tight bbox of the polygons, used as an outer guard and as the whole
+   // clamp until the polygon data arrives.
+   var anchorBox = { w: 34.2675, e: 35.8954, s: 29.4878, n: 33.3352 };
+   function pointInRing(lng, lat, ring) {
+     var inside = false;
+     for (var i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+       var xi = ring[i][0], yi = ring[i][1], xj = ring[j][0], yj = ring[j][1];
+       if ((yi > lat) !== (yj > lat) &&
+           lng < (xj - xi) * (lat - yi) / (yj - yi) + xi) inside = !inside;
+     }
+     return inside;
+   }
+   // Distance (degrees) to the nearest point on the ring; writes that point
+   // into out[0]/out[1].
+   function ringDistance(lng, lat, ring, out) {
+     var best = Infinity, bx = 0, by = 0;
+     for (var i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+       var ax = ring[j][0], ay = ring[j][1];
+       var dx = ring[i][0] - ax, dy = ring[i][1] - ay;
+       var len2 = dx * dx + dy * dy;
+       var t = len2 ? ((lng - ax) * dx + (lat - ay) * dy) / len2 : 0;
+       t = Math.max(0, Math.min(1, t));
+       var px = ax + t * dx, py = ay + t * dy;
+       var d2 = (lng - px) * (lng - px) + (lat - py) * (lat - py);
+       if (d2 < best) { best = d2; bx = px; by = py; }
+     }
+     out[0] = bx; out[1] = by;
+     return Math.sqrt(best);
+   }
+   var _nearest = [0, 0];
    function clampToAnchor(center) {
-     var lng = Math.min(Math.max(center.lng, anchorBox.w), anchorBox.e);
-     var lat = Math.min(Math.max(center.lat, anchorBox.s), anchorBox.n);
-     if (lng === center.lng && lat === center.lat) return null;
-     return [lng, lat];
+     var lng = Math.min(Math.max(center.lng, anchorBox.w - ANCHOR_MARGIN), anchorBox.e + ANCHOR_MARGIN);
+     var lat = Math.min(Math.max(center.lat, anchorBox.s - ANCHOR_MARGIN), anchorBox.n + ANCHOR_MARGIN);
+     if (!anchorRing) {
+       return (lng === center.lng && lat === center.lat) ? null : [lng, lat];
+     }
+     if (pointInRing(lng, lat, anchorRing) ||
+         ringDistance(lng, lat, anchorRing, _nearest) <= ANCHOR_MARGIN) {
+       return (lng === center.lng && lat === center.lat) ? null : [lng, lat];
+     }
+     return [_nearest[0], _nearest[1]];
    }
    map.on('move', function () {
      var clamped = clampToAnchor(map.getCenter());
@@ -3651,6 +3685,13 @@ function buildPolygons(data, onReady) {
 
     // Re-derive the pan anchors from the actual polygons (see the map-anchor
     // note above), so future polygon updates move the anchors with the data.
+    if (Array.isArray(data._border) && data._border.length > 2) {
+      anchorRing = Array.isArray(data._border[0][0]) ? data._border[0] : data._border;
+      // A center saved in localStorage before the outline existed self-heals
+      // now that the real shape is available.
+      var lateClamped = clampToAnchor(map.getCenter());
+      if (lateClamped) map.setCenter(lateClamped);
+    }
     var abx = { w: 180, e: -180, s: 90, n: -90 };
     features.forEach(function (f) {
       f.geometry.coordinates.forEach(function (ring) {
@@ -3662,12 +3703,7 @@ function buildPolygons(data, onReady) {
         });
       });
     });
-    anchorBox = {
-      w: abx.w - ANCHOR_PAD.w,
-      e: abx.e + ANCHOR_PAD.e,
-      s: abx.s - ANCHOR_PAD.s,
-      n: abx.n + ANCHOR_PAD.n
-    };
+    anchorBox = { w: abx.w, e: abx.e, s: abx.s, n: abx.n };
 
     polygonsGeoJSON.features = features;
     updateMapLibreSource();
