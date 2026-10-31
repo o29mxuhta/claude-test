@@ -1,6 +1,6 @@
 # R2 history and 2023 backfill
 
-Adds an upstream-derived AGPL-3.0 ingestion worker, an isolated browser-ingest relay, a metadata-controlled date range, and a CSV backfill tool. Existing date limits remain until day files and then the range marker are uploaded. Browser-submitted data stays in an untrusted live/ prefix, separate from canonical history; abuse and cost controls must be reviewed before enabling the relay. Empty-feed cross-checks detect disagreement, not two feeds failing empty together. Switching to a past day with no data clears the previous day's alert colors from the map (today's live alerts are never touched).
+Adds an upstream-derived AGPL-3.0 ingestion worker, a metadata-controlled date range, and a CSV backfill tool. Existing date limits remain until day files and then the range marker are uploaded. Empty-feed cross-checks detect disagreement, not two feeds failing empty together. The browser-ingest relay was retired on 2026-10-31 after the abuse-control review (see step 8): nothing consumed the untrusted live/ prefix and there is no relay to enable. Switching to a past day with no data clears the previous day's alert colors from the map (today's live alerts are never touched).
 
 The conversion produces 614 daily files, 74,882 entries, about 11 MB for 2023-01-01 through 2026-02-27. Source: https://github.com/yuval-harpaz/alarms - keep this attribution with the data. Anyone redistributing derived data is responsible for holding the source author's permission. The source lacks all-clear messages and some alert categories. Historical replay uses its existing one-hour expiry, not an official event-end time. 102 unresolved place names affect 2,471 rows (3.3%); preserve them without guessing a current polygon.
 
@@ -15,7 +15,7 @@ Set up usage monitoring first. Check the current R2 and Workers tier limits (htt
 5. Read back the stored data: list the bucket, compare object count and sizes against the local files, and fetch-sample a busy day and a quiet day. Do not bind before read-back matches.
 6. Bind the Pages project: Settings > Bindings > Add > R2 bucket, variable name HISTORY_BUCKET, bucket `oref-history`, for BOTH production and preview, then redeploy: Pages binding changes take effect only after a redeploy (https://developers.cloudflare.com/pages/functions/bindings/). Verify the actually-served deployment afterward.
 7. Canary the collector feed: at the next real alert, compare `/api/day-history?date=<today>` against the live feed. Until this check passes on a non-empty feed, treat the collector as unverified.
-8. Optional, deferred until abuse controls are reviewed: set the Pages variable `INGEST_WORKER_URL` to enable the browser-ingest relay. That endpoint is unauthenticated by design and writes only to the untrusted `live/` prefix.
+8. RETIRED 2026-10-31: the browser-ingest relay was removed after the abuse-control review (Pages variable `INGEST_WORKER_URL`, `functions/api/ingest.js`, `forwardAlertToCache` in web/index.html, and the worker's POST /ingest route). Nothing consumed the untrusted `live/` prefix. Do not re-add a public write path without authentication and rate limiting.
 
 ## Cutoff and rollback
 
