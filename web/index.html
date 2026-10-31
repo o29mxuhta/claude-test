@@ -322,10 +322,10 @@ body.panel-open #timeline-btn, body.driving #timeline-btn { display: none !impor
    minimum — shrinking the transport buttons past that would trade map area for
    misses on the scrub controls. */
 #up-timeline { flex-shrink: 0; direction: ltr; padding: 6px 10px 4px; border-top: 1px solid #eee; }
-#timeline-slider-wrap { position: relative; width: 100%; padding-bottom: 8px; }
-#timeline-ticks { position: relative; width: calc(100% - 13px); margin: 0 6.5px; height: 8px; pointer-events: none; border-radius: 4px; overflow: hidden; background: #eee; }
+#timeline-slider-wrap { position: relative; width: 100%; height: 28px; }
+#timeline-ticks { position: absolute; top: 10px; left: 6.5px; width: calc(100% - 13px); height: 8px; pointer-events: none; border-radius: 4px; overflow: hidden; background: #93c5fd; }
 #timeline-ticks span { position: absolute; height: 100%; top: 0; opacity: 0.85; }
-#timeline-slider { width: 100%; cursor: pointer; -webkit-appearance: none; appearance: none; height: 4px; border-radius: 2px; background: #93c5fd; margin-top: 10px; }
+#timeline-slider { position: absolute; top: 10px; left: 0; width: 100%; margin: 0; cursor: pointer; -webkit-appearance: none; appearance: none; height: 8px; border-radius: 4px; background: transparent; }
 #timeline-slider:focus-visible { outline: 2px solid #1d4ed8; outline-offset: 2px; }
 #timeline-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 13px; height: 20px; background: #3b82f6; clip-path: polygon(50% 0%, 100% 45%, 100% 100%, 0% 100%, 0% 45%); cursor: pointer; }
 #timeline-slider::-moz-range-thumb { width: 13px; height: 20px; background: #3b82f6; clip-path: polygon(50% 0%, 100% 45%, 100% 100%, 0% 100%, 0% 45%); cursor: pointer; border: none; }
