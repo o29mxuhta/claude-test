@@ -324,6 +324,12 @@ body.panel-open #timeline-btn, body.driving #timeline-btn { display: none !impor
 #up-timeline { flex-shrink: 0; direction: ltr; padding: 6px 10px 4px; border-top: 1px solid #eee; }
 #timeline-slider-wrap { position: relative; width: 100%; height: 28px; }
 #timeline-ticks { position: absolute; top: 10px; left: 6.5px; width: calc(100% - 13px); height: 8px; pointer-events: none; border-radius: 4px; overflow: hidden; background: #93c5fd; }
+#timeline-archive-status { direction: rtl; color: #555; font-size: 12px; line-height: 1.4; margin: 5px 0; }
+body.dark #timeline-archive-status { color: #ccc; }
+#timeline-unknown-records { max-height: 112px; overflow-y: auto; direction: rtl; font-size: 12px; color: #555; margin-top: 6px; border-top: 1px solid #ddd; padding-top: 5px; }
+#timeline-unknown-records[hidden] { display: none; }
+.timeline-unknown-row { padding: 3px 0; }
+body.dark #timeline-unknown-records { color: #ccc; border-color: #555; }
 #timeline-ticks span { position: absolute; height: 100%; top: 0; opacity: 0.85; }
 #timeline-slider { position: absolute; top: 10px; left: 0; width: 100%; margin: 0; cursor: pointer; -webkit-appearance: none; appearance: none; height: 8px; border-radius: 4px; background: transparent; }
 #timeline-slider:focus-visible { outline: 2px solid #1d4ed8; outline-offset: 2px; }
@@ -1358,6 +1364,8 @@ try {
       <div id="timeline-ticks"></div>
       <input type="range" id="timeline-slider" min="0" max="999" value="999" step="1">
     </div>
+    <div id="timeline-archive-status" role="status" aria-live="polite"></div>
+    <div id="timeline-unknown-records" hidden></div>
     <div id="timeline-date-row">
       <span id="timeline-label"></span>
         <div id="timeline-date-nav">
@@ -2960,6 +2968,7 @@ refreshUserLocationMarkerIcon = function() {
   var rebuildTimelineFn = function() {}; // set by initTimeline
   var openTimelineFn = function() {}; // set by initTimeline
   var timelineDate = null;         // 'YYYY-MM-DD' string, null = today
+  var archiveReadState = { date: null, status: 'loading', count: 0 };
   var dayHistoryReady = false;     // true once day-history fetch completes
   var historyPollId  = null;        // setInterval ID for fetchHistory
   var livePollId     = null;        // setInterval ID for fetchLiveAlerts
@@ -5229,15 +5238,18 @@ function prefetchDayHistory(date) {
   function fetchExtendedHistory(onDone) {
     var dateParam = timelineDate || todayDateStr();
     var finalized = false;
+    archiveReadState = { date: dateParam, status: 'loading', count: 0 };
 
 function processEntries(entries) {
       var added = 0;
       for (var i = 0; i < entries.length; i++) {
         var e = entries[i];
-        if (!e.data || !e.category_desc) continue;
+        if (!e.data) continue;
         var rid = String(e.rid || '');
-        var title = (e.category_desc || '').replace(/\s+/g, ' ').trim();
-        var state = classifyTitle(title);
+        var sourceTitle = (typeof e.category_desc === 'string' ? e.category_desc : '').replace(/\s+/g, ' ').trim();
+        var missingType = !sourceTitle;
+        var title = sourceTitle || 'סוג התרעה לא ידוע';
+        var state = missingType ? 'unknown' : classifyTitle(title);
         var ts = parseAlertDate(e.alertDate);
         if (!ts) continue;
         
@@ -5255,11 +5267,14 @@ function processEntries(entries) {
           if (aliasTarget) locations = [aliasTarget];
         }
 
+        // Missing-type records still retain the source place when it cannot
+        // be mapped. They are listed and marked neutrally, never painted as a threat.
+        if (missingType && !locations.length) locations = rawLocations.map(String);
         for (var j = 0; j < locations.length; j++) {
             var location = locations[j];
             if (!location) continue;
-            var ridKey = rid ? (location + '|' + rid) : '';
-            var compositeKey = location + '|' + (e.alertDate || '').replace('T', ' ');
+            var ridKey = rid ? (location + '|' + rid + (missingType ? '|unknown-type' : '')) : '';
+            var compositeKey = location + '|' + (e.alertDate || '').replace('T', ' ') + (missingType ? '|unknown-type' : '');
             if (ridKey && extendedRids.has(ridKey)) continue;
             if (extendedRids.has(compositeKey)) continue;
             if (ridKey) extendedRids.add(ridKey);
@@ -5269,7 +5284,7 @@ function processEntries(entries) {
             // per-location history LIST needs a concrete colour now, and the
             // documented default for a shelter command with nothing preceding
             // it is red.
-            extendedHistory.push({ location: location, title: title, alertDate: ts, state: state });
+            extendedHistory.push({ location: location, sourcePlace: missingType ? rawLocations.join(' / ') : null, title: title, alertDate: ts, state: state });
             recordHistory(location, title, e.alertDate || '', state === 'inherit' ? 'red' : state);
             added++;
         }
@@ -5279,6 +5294,7 @@ function processEntries(entries) {
 
 
     function finalize() {
+      if (dateParam !== (timelineDate || todayDateStr())) return;
       if (finalized) return; // already handled (404 or non-array)
       finalized = true;
       extendedHistory.sort(function(a, b) { return a.alertDate - b.alertDate; });
@@ -5299,7 +5315,9 @@ function processEntries(entries) {
       : fetchConcurrentRead('day:' + dateParam, HISTORY_BASE + '/api/day-history?date=' + dateParam)
           .then(function(resp) {
             if (resp.status === 404) {
+              if (dateParam !== (timelineDate || todayDateStr())) return;
               console.log('No day-history data for', dateParam);
+              archiveReadState = { date: dateParam, status: 'missing', count: 0 };
               return;
             }
             if (!resp.ok) throw new Error('HTTP ' + resp.status);
@@ -5307,13 +5325,17 @@ function processEntries(entries) {
           })
     )
       .then(function(entries) {
+        if (dateParam !== (timelineDate || todayDateStr())) return;
         if (!entries) return; // 404 case already handled
-        if (!Array.isArray(entries)) return;
+        if (!Array.isArray(entries)) throw new Error('Invalid archive response');
+        archiveReadState = { date: dateParam, status: entries.length ? 'saved' : 'empty', count: entries.length };
         processEntries(entries);
       })
       .then(finalize)
       .catch(function(err) {
         console.error('Day history fetch error:', err);
+        if (dateParam !== (timelineDate || todayDateStr())) return;
+        archiveReadState = { date: dateParam, status: 'error', count: 0 };
         dayHistoryReady = true;
         if (onDone) onDone();
         updateLiveStatus(); 
@@ -5340,6 +5362,7 @@ function processEntries(entries) {
     for (var i = 0; i < extendedHistory.length; i++) {
       var e = extendedHistory[i];
       if (e.alertDate > targetTime) break;
+      if (e.state === 'unknown') continue; // Presence only, not a threat or an all-clear.
       var existing = accumulated[e.location];
       // A generic shelter command inherits the threat already active at replay
       // position, defaulting to red.
@@ -5463,6 +5486,47 @@ function processEntries(entries) {
     var TICK_COLORS = { red: '#e74c3c', brown: '#8b4513', purple: '#9b59b6', yellow: '#f1c40f', green: '#2ecc71', hazmat: '#009999', earthquake: '#ff8800' };
     var PLAY_SPEED = 510;
 
+    function renderArchiveStatus() {
+      var box = document.getElementById('timeline-archive-status');
+      var currentDate = timelineDate || todayDateStr();
+      var status = archiveReadState.date === currentDate ? archiveReadState.status : 'loading';
+      if (status === 'saved') box.textContent = 'נטענו ' + archiveReadState.count + ' רשומות מהארכיון. שלמות האיסוף לא אומתה.';
+      else if (status === 'error') box.textContent = 'טעינת הארכיון נכשלה. אי אפשר להסיק אם היו התרעות.';
+      else if (status === 'missing') box.textContent = 'לא נמצא קובץ ארכיון לתאריך זה. אין בכך אישור שלא היו התרעות.';
+      else if (status === 'empty') box.textContent = 'הארכיון החזיר רשימה ריקה. אין בכך אישור שלא היו התרעות.';
+      else box.textContent = 'טוען רשומות ארכיון...';
+    }
+
+    function renderUnknownRecords() {
+      var box = document.getElementById('timeline-unknown-records');
+      box.textContent = '';
+      var bounds = viewingDayBounds();
+      var details = document.createElement('details');
+      var summary = document.createElement('summary');
+      summary.style.cursor = 'pointer';
+      details.appendChild(summary);
+      box.appendChild(details);
+      var seen = new Set();
+      extendedHistory.forEach(function(e) {
+        if (e.state !== 'unknown' || e.alertDate < bounds.start || e.alertDate > bounds.end) return;
+        var place = e.sourcePlace || e.location;
+        var key = e.alertDate + '|' + place;
+        if (seen.has(key)) return;
+        seen.add(key);
+        var row = document.createElement('div');
+        row.className = 'timeline-unknown-row';
+        row.textContent = formatTime(e.alertDate) + ' · ' + place + ' · סוג התרעה לא ידוע';
+        details.appendChild(row);
+      });
+      box.hidden = seen.size === 0;
+      summary.textContent = seen.size + ' רשומות עם סוג התרעה לא ידוע · הצג זמן ומקום';
+      if (seen.size) {
+        var heading = document.createElement('div');
+        heading.textContent = 'רשומות ללא תיאור סוג. סימון אפור מציין זמן בלבד, לא התרעה פעילה או סיום אירוע.';
+        details.insertBefore(heading, summary.nextSibling);
+      }
+    }
+
     function updateDateNav() {
       var d = timelineDate || todayDateStr();
       
@@ -5488,6 +5552,8 @@ function processEntries(entries) {
       var bounds = viewingDayBounds();
       timelineMin = bounds.start;
       timelineMax = bounds.end;
+      renderUnknownRecords();
+      renderArchiveStatus();
       
       if (extendedHistory.length > 0) {
         extendedHistory.sort(function(a, b) { return a.alertDate - b.alertDate; });
@@ -5534,7 +5600,9 @@ function processEntries(entries) {
             setTimelineLabel(formatTime(clampTime(Date.now())));
           }
         } else {
-          setTimelineLabel('אין נתונים בתאריך זה', true);
+          setTimelineLabel(archiveReadState.status === 'error' ? 'שגיאה בטעינת הארכיון' : 'אין רשומות להצגה', true);
+          document.getElementById('historyTimeLabel').style.display = 'none';
+          setStatus('history', 'תצוגת עבר: ' + formatDateLabel(timelineDate) + ' · ' + (archiveReadState.status === 'error' ? 'טעינת הארכיון נכשלה' : 'אין רשומות להצגה'));
           label.style.opacity = '0.5';
         }
       }
@@ -5551,6 +5619,9 @@ function processEntries(entries) {
       }
 
       dayHistoryReady = false;
+      archiveReadState = { date: newDate, status: 'loading', count: 0 };
+      renderArchiveStatus();
+      document.getElementById('timeline-unknown-records').hidden = true;
       extendedHistory = [];
       extendedRids = new Set();
       locationHistory = {};
@@ -5966,6 +6037,7 @@ function processEntries(entries) {
       var groupLocs = new Set();
       for (var i = 0; i < extendedHistory.length; i++) {
         var e = extendedHistory[i];
+        if (e.state === 'unknown') continue;
         if (e.state !== 'green') {
           if (prevWasGreen || firstNonGreenTime === null) firstNonGreenTime = e.alertDate;
           prevWasGreen = false;
@@ -6031,6 +6103,7 @@ function processEntries(entries) {
 
       for (var i = 0; i < extendedHistory.length; i++) {
         var e = extendedHistory[i];
+        if (e.state === 'unknown') continue;
         // Expire stale entries — if expiry causes a state drop, close the current band.
         var maxExpiry = 0, anyExpired = false;
         for (var loc in locStates) {
@@ -6094,6 +6167,19 @@ function processEntries(entries) {
         span.style.background = TICK_COLORS[b.state] || TICK_COLORS.red;
         ticksEl.appendChild(span);
       }
+
+      // Unknown types are point-in-time presence marks, never duration bands.
+      extendedHistory.forEach(function(e) {
+        if (e.state !== 'unknown' || e.alertDate < timelineMin || e.alertDate > timelineMax) return;
+        var pct = Math.max(0, Math.min(100, ((e.alertDate - timelineMin) / range) * 100));
+        var mark = document.createElement('span');
+        mark.style.left = Math.min(pct, 99.4) + '%';
+        mark.style.width = '0.6%';
+        mark.style.background = '#777';
+        mark.style.opacity = '1';
+        mark.title = formatTime(e.alertDate) + ' · ' + (e.sourcePlace || e.location) + ' · סוג התרעה לא ידוע';
+        ticksEl.appendChild(mark);
+      });
 
       // Gray out future portion when viewing today
       if (isViewingToday()) {
