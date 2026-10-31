@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+jobs:
+  tests:
+    name: tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # web/ scripts and tests/ are classic scripts; node --check catches
+      # syntax errors before they reach the live site.
+      - name: Syntax-check classic scripts
+        run: |
+          set -e
+          for f in web/*.js tests/*.js; do
+            node --check "$f" || { echo "SYNTAX FAIL: $f"; exit 1; }
+          done
+
+      # Cloudflare Pages Functions / Workers are ES modules; node --check
+      # only treats .mjs as ESM, so check via a temp copy.
+      - name: Syntax-check ES modules
+        run: |
+          set -e
+          for f in functions/api/*.js functions/*.js history-api/*.js ingestion/src/*.js; do
+            cp "$f" "$RUNNER_TEMP/check.mjs"
+            node --check "$RUNNER_TEMP/check.mjs" || { echo "SYNTAX FAIL: $f"; exit 1; }
+          done
+
+      - name: Run unit tests
+        run: |
+          set -e
+          for t in tests/*.test.js; do
+            echo "=== $t ==="
+            node "$t"
+          done

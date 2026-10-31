@@ -1,0 +1,40 @@
+# CodeRabbit configuration for redmap (claude-test).
+# Reviews run on every PR; automatic approvals let CodeRabbit's approval count
+# toward the required approving review on dev, so a clean review + green CI
+# is what releases auto-merge. Findings post a request-changes review and block.
+
+language: en-US
+
+reviews:
+  profile: chill
+  request_changes_workflow: true
+  high_level_summary: true
+  review_status: true
+  auto_review:
+    enabled: true
+    drafts: false
+  auto_approvals:
+    enabled: true
+    # The PR author may not force approval with @coderabbitai approve/resolve;
+    # only a completed clean review may approve. Fail-closed by design.
+    allow_author_approval: false
+  path_filters:
+    # Generated/binary/static assets carry no reviewable logic.
+    - '!assets/**'
+    - '!web/*.png'
+    - '!web/*.jpg'
+    - '!web/*.wav'
+    - '!web/*.csv'
+    - '!uv.lock'
+  instructions: |
+    This project is a live Home Front Command alert map used during active
+    rocket attacks. Pay special attention to:
+    - Anything that could show an empty-success when the upstream alert API
+      fails (a failed fetch must surface as an error, never as "no alerts").
+    - Hebrew alert-title classification and zone-name matching logic.
+    - Cloudflare Pages Functions / Workers edge code (functions/, history-api/,
+      ingestion/): caching, CORS headers and redirect handling regressions.
+    Comments may reference Hebrew strings; keep them exact.
+
+chat:
+  auto_reply: true
