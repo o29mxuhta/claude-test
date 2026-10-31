@@ -11,7 +11,7 @@ compatibility_date = "2024-01-01"
 # This is about READING the upstream feed - unrelated to the worker's own
 # public /ingest endpoint, which stays unauthenticated by design.
 [vars]
-HISTORY_PROXY_URL = "https://api.redmap.dev"
+HISTORY_PROXY_URL = "https://oref-proxy.xanaxmap.workers.dev"
 
 [triggers]
 crons = ["1/2 * * * *"]

@@ -19,12 +19,11 @@ const TLV_PROXY_HOSTS = [
 
 const PROXY_HOST_PATTERNS = [
   /^api2\.redmap\.me$/,
-  /^api\.redmap\.dev$/,
   /^oreftest\.kon40\.com$/,
 ];
 
 // The client fetches these endpoints from a different origin (the page is on
-// redmap.dev, the API on api.redmap.dev), so every response — including
+// redmap.me, the live API on api2.redmap.me), so every response — including
 // redirects and errors — must carry CORS headers or the fetch is blocked.
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
