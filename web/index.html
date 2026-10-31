@@ -5527,11 +5527,12 @@ function processEntries(entries) {
       var box = document.getElementById('timeline-archive-status');
       var currentDate = timelineDate || todayDateStr();
       var status = archiveReadState.date === currentDate ? archiveReadState.status : 'loading';
-      if (status === 'saved') box.textContent = 'נטענו ' + archiveReadState.count + ' רשומות מהארכיון. שלמות האיסוף לא אומתה.';
+      if (status === 'saved') box.textContent = 'נמצאו ' + archiveReadState.count + ' אירועים ליום הנבחר';
       else if (status === 'error') box.textContent = 'טעינת הארכיון נכשלה. אי אפשר להסיק אם היו התרעות.';
-      else if (status === 'missing') box.textContent = 'לא נמצא קובץ ארכיון לתאריך זה. אין בכך אישור שלא היו התרעות.';
-      else if (status === 'empty') box.textContent = 'הארכיון החזיר רשימה ריקה. אין בכך אישור שלא היו התרעות.';
+      else if (status === 'missing') box.textContent = 'לא נמצאו אירועים ליום הנבחר.';
+      else if (status === 'empty') box.textContent = 'לא נמצאו אירועים ליום הנבחר.';
       else box.textContent = 'טוען רשומות ארכיון...';
+      if (localStorage.getItem('oref-dev-tools') !== 'true') return;
       if (!archiveCoverage || status === 'loading') return;
       var counts = {a: 0, q: 0, f: 0};
       function israel23(dateStr) {
@@ -5560,19 +5561,20 @@ function processEntries(entries) {
       var details = document.createElement('details');
       var summary = document.createElement('summary');
       summary.style.cursor = 'pointer';
-      summary.textContent = 'חלונות איסוף: ' + counts.a + ' נשמרו, ' + counts.q + ' שקט לא מאומת, ' + counts.f + ' ללא תוצאה · פרטים';
+      summary.textContent = 'חלונות איסוף: ' + counts.a + ' נשמרו, ' + counts.q + ' שקט, ' + counts.f + ' ללא תוצאה · פרטים';
       details.appendChild(summary);
       var note = document.createElement('div');
       note.textContent = (archiveCoverage.capped ? 'תקרת רישום המצב הושגה; הרישום לא ממשיך. ' : '') + 'החלון האחרון ברישום מסתיים ב־' + new Date(lastWindowEnd).toLocaleString('he-IL', {timeZone: 'Asia/Jerusalem'}) + '. ' + 'חלון הארכיון: מ־23:00 ביום הקודם עד 23:00 בתאריך הנבחר (לא כולל). עדכון: ' +
-        new Date(archiveCoverage.asOf).toLocaleString('he-IL', {timeZone: 'Asia/Jerusalem'}) + '. יתר החלונות לא ידועים. שמירת רשומות אינה הוכחת כיסוי מלא.';
+        new Date(archiveCoverage.asOf).toLocaleString('he-IL', {timeZone: 'Asia/Jerusalem'}) + '.';
       if (coverageBounds.start >= lastWindowEnd) summary.textContent = 'אין רישום מצב עדכני לתאריך זה · פרטים';
       details.appendChild(note);
       var list = document.createElement('div');
       list.style.maxHeight = '112px'; list.style.overflowY = 'auto';
-      var labels = {a: 'נשמרו רשומות; שלמות לא אומתה', q: 'שקט ללא אימות כיסוי', f: 'ללא תוצאה סופית', '?': 'לא ידוע'};
+      var labels = {a: 'נשמרו רשומות', q: 'שקט', f: 'ללא תוצאה סופית'};
       for (var t = coverageBounds.start; t < coverageBounds.end; t += 900000) {
         var idx = Math.floor(t / 900000) - archiveCoverage.start;
         var code = archiveCoverage.states[idx] || '?';
+        if (code === '?') continue; // unknown windows are not shown
         var row = document.createElement('div');
         row.textContent = new Date(t).toLocaleString('he-IL', {timeZone: 'Asia/Jerusalem', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZoneName: 'shortOffset'}) + ' · ' + labels[code];
         list.appendChild(row);
@@ -7293,6 +7295,7 @@ document.addEventListener('DOMContentLoaded', function() {
   var devToolsEnabled = localStorage.getItem('oref-dev-tools') === 'true';
   
   function updateDevToolsState() {
+      if (typeof refreshCoverageStatus === 'function') refreshCoverageStatus();
       if (devToolsEnabled) {
           devToolsContainer.style.display = 'flex';
           if (devToolsMenuWrapper) devToolsMenuWrapper.classList.add('active');
