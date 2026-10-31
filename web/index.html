@@ -1508,11 +1508,15 @@ try {
 // 2. Adjust this if your custom proxy uses a different route path (or leave empty if it handles endpoints at the root)
 var apiPrefix = '/api'; 
 
+var feedRequestProof = new WeakMap();
 var concurrentReads = Object.create(null);
 function fetchConcurrentRead(key, url, options, sameTaskOnly) {
     var pending = concurrentReads[key];
     if (!pending) {
+        var proof = key.indexOf('api:') === 0 ? { id: crypto.randomUUID(), started: performance.now(), startedWall: Date.now() } : null;
+        if (proof) url += (url.indexOf('?') === -1 ? '?' : '&') + '_source_request=' + encodeURIComponent(proof.id);
         pending = fetch(url, options);
+        pending.sourceProof = proof;
         concurrentReads[key] = pending;
         function release() {
             if (concurrentReads[key] === pending) delete concurrentReads[key];
@@ -1520,7 +1524,11 @@ function fetchConcurrentRead(key, url, options, sameTaskOnly) {
         if (sameTaskOnly) setTimeout(release, 0);
         else pending.then(release, release);
     }
-    return pending.then(function(response) { return response.clone(); });
+    return pending.then(function(response) {
+        var copy = response.clone();
+        if (pending.sourceProof) feedRequestProof.set(copy, pending.sourceProof);
+        return copy;
+    });
 }
 
 function apiFetch(endpoint) {
@@ -4946,7 +4954,9 @@ var feedHealth = {
 var FEED_STALE_MS = { alerts: 5000, history: 30000 };
 function feedIsHealthy(kind, now) {
   var h = feedHealth[kind];
-  return !!h.checkedAt && !h.error && h.receivedAt <= now && now - h.receivedAt <= FEED_STALE_MS[kind] && h.checkedAt <= now && now - h.checkedAt <= FEED_STALE_MS[kind];
+  var age = performance.now() - h.receivedMono;
+  var wallAge = Date.now() - h.receivedAt;
+  return !!h.checkedAt && !h.error && Number.isFinite(age) && age >= 0 && age <= FEED_STALE_MS[kind] && Number.isFinite(wallAge) && wallAge >= 0 && wallAge <= FEED_STALE_MS[kind];
 }
 function feedFailureSummary() {
   var now = Date.now();
@@ -4961,8 +4971,10 @@ function readCheckedFeed(resp, kind) {
   if (!resp.ok) return Promise.reject(new Error('HTTP ' + resp.status));
   var status = Number(resp.headers.get('X-Upstream-Status'));
   var checkedAt = Date.parse(resp.headers.get('X-Source-Checked-At'));
-  var now = Date.now();
-  if (!(status >= 200 && status < 300) || !Number.isFinite(checkedAt) || checkedAt > now || now - checkedAt > FEED_STALE_MS[kind]) {
+  var proof = feedRequestProof.get(resp);
+  var elapsed = proof ? performance.now() - proof.started : NaN;
+  var wallElapsed = proof ? Date.now() - proof.startedWall : NaN;
+  if (!(status >= 200 && status < 300) || !Number.isFinite(checkedAt) || !proof || resp.headers.get('X-Source-Request-Id') !== proof.id || !Number.isFinite(elapsed) || elapsed < 0 || elapsed > FEED_STALE_MS[kind] || !Number.isFinite(wallElapsed) || wallElapsed < 0 || wallElapsed > FEED_STALE_MS[kind]) {
     return Promise.reject(new Error('Missing or stale verified source response'));
   }
   return resp.text().then(function(raw) {
@@ -4974,7 +4986,8 @@ function readCheckedFeed(resp, kind) {
       : Array.isArray(data) && data.every(function(item) { return item && typeof item === 'object' && (typeof item.data === 'string' || Array.isArray(item.data)) && typeof item.alertDate === 'string'; });
     if (!valid) throw new Error('Invalid feed payload');
     // Commit health only after both transport metadata and payload are valid.
-    feedHealth[kind] = { checkedAt: checkedAt, receivedAt: Date.now(), error: '' };
+    if (performance.now() - proof.started > FEED_STALE_MS[kind] || Date.now() - proof.startedWall < 0 || Date.now() - proof.startedWall > FEED_STALE_MS[kind]) throw new Error('Missing or stale verified source response');
+    feedHealth[kind] = { checkedAt: checkedAt, receivedAt: Date.now(), receivedMono: performance.now(), error: '' };
     return { text: text, data: data };
   });
 }
@@ -5152,7 +5165,7 @@ function fetchHistory(onDone) {
         lastCfColo = resp.headers.get('X-CF-Colo') || lastCfColo;
         return readCheckedFeed(resp, 'history').catch(function(err) {
           if (!(err instanceof SyntaxError)) throw err;
-          return fetch(PROXY_BASE + apiPrefix + '/history', { cache: 'no-store' })
+          return apiFetch('history')
             .then(function(retry) { return readCheckedFeed(retry, 'history'); });
         });
       })
