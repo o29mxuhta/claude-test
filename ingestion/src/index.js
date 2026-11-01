@@ -425,7 +425,11 @@ export default {
         }
         const newLines = fresh.map(e => JSON.stringify(e) + ',\n').join('');
         const putOpts = { httpMetadata: { contentType: 'application/jsonl' } };
+        // Conditional write: update only the version just read; create only if
+        // still absent. A concurrent writer fails the precondition and forces
+        // a re-read + dedup instead of a lost update or double append.
         if (existing) putOpts.onlyIf = { etagMatches: existing.etag };
+        else putOpts.onlyIf = { etagDoesNotMatch: '*' };
         const saved = await env.HISTORY_BUCKET.put(`${d}.jsonl`, existingText + newLines, putOpts);
         if (saved !== null) {
           console.log(`Wrote ${d}.jsonl: ${fresh.length} new (${dateEntries.length - fresh.length} already archived) + ${existingText.length} bytes existing`);

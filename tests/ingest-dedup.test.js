@@ -39,6 +39,8 @@ function makeBucket(seed) {
     put: async function (key, value, opts) {
       if (opts && opts.onlyIf && opts.onlyIf.etagMatches &&
           etags[key] !== opts.onlyIf.etagMatches) return null; // R2 precondition failed
+      if (opts && opts.onlyIf && opts.onlyIf.etagDoesNotMatch === '*' &&
+          store.has(key)) return null; // create-if-absent failed
       store.set(key, value);
       etags[key] = 'etag-' + (++n);
       return { key: key, etag: etags[key] };
@@ -117,6 +119,22 @@ function lines(bucket, key) {
   b6.store.delete(MARKER_KEY);
   await run(worker, b6, [{ data: 'עפולה', alertDate: '2026-11-01 13:52:40', title: 'חדירת כלי טיס עוין', category: 2 }]);
   assert(lines(b6, DAY_KEY).length === 2, 'distinct records kept, got ' + lines(b6, DAY_KEY).length);
+
+  section('7b. Concurrent first create forces re-read, records still archived once');
+  var b7b = makeBucket();
+  var realPut7b = b7b.put, raced7b = false;
+  b7b.put = async function (key, value, opts) {
+    if (!raced7b && key.slice(-6) === '.jsonl') {
+      raced7b = true;
+      b7b.store.set(key, value); // concurrent run creates the file first
+      return realPut7b(key, value, opts); // our create-if-absent now fails -> null
+    }
+    return realPut7b(key, value, opts);
+  };
+  await run(worker, b7b, [ext(101, 'עפולה', '13:47:15')]);
+  assert((lines(b7b, DAY_KEY).join('\n').match(/"rid":101/g) || []).length === 1,
+    'rid 101 archived exactly once after create race');
+  assert(b7b.store.get(MARKER_KEY) === '1', 'marker written after create-race recovery');
 
   section('7. Concurrent writer forces re-read, records still archived once');
   var b7 = makeBucket();
