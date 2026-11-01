@@ -1542,7 +1542,52 @@ try {
   // Set PROXY_BASE to the Cloudflare Worker URL for production, e.g.:
   //   var PROXY_BASE = 'https://oref-proxy.YOUR_ACCOUNT.workers.dev';
   var ANALYTICS_POLL_MS = 30000;
+  // Idle-timeout source: same request/response rules as pmtiles FetchSource,
+  // but a range request that receives no response bytes for IDLE_MS is aborted
+  // and re-issued (max MAX_RETRIES times). Caller aborts (map cancelling a tile) pass through untouched.
+  function TimeoutSource(url){this.url=url;this.mustReload=false;var ua=(typeof navigator!=='undefined'&&navigator.userAgent)||'';this.noStore=ua.indexOf('Windows')>-1&&/Chrome|Chromium|Edg|OPR|Brave/.test(ua);window.__pmStats={attempts:0,timeouts:0,retries:0,failed:0};}
+  TimeoutSource.prototype.getKey=function(){return this.url;};
+  TimeoutSource.prototype.getBytes=function(offset,length,signal,etag){
+    var self=this,IDLE_MS=15000,MAX_RETRIES=2,attempt=0;
+    function once(){
+      if(signal&&signal.aborted)return Promise.reject(new DOMException('Aborted','AbortError'));
+      var ac=new AbortController(),idleHit=false,timer=null;
+      var onAbort=function(){ac.abort();};
+      if(signal)signal.addEventListener('abort',onAbort);
+      function arm(){clearTimeout(timer);timer=setTimeout(function(){idleHit=true;window.__pmStats.timeouts++;ac.abort();},IDLE_MS);}
+      function cleanup(){clearTimeout(timer);if(signal)signal.removeEventListener('abort',onAbort);}
+      window.__pmStats.attempts++;
+      arm();
+      return fetch(self.url,{signal:ac.signal,cache:self.mustReload?'reload':(self.noStore?'no-store':undefined),headers:{range:'bytes='+offset+'-'+(offset+length-1)}}).then(function(r0){
+        if(offset===0&&r0.status===416){var cr=r0.headers.get('Content-Range');if(!cr||cr.indexOf('bytes */')!==0)throw Error('Missing content-length on 416 response');var L=+cr.substr(8);return fetch(self.url,{signal:ac.signal,cache:'reload',headers:{range:'bytes=0-'+(L-1)}});}
+        return r0;
+      }).then(function(resp){
+        arm();
+        var newEtag=resp.headers.get('Etag');if(newEtag&&newEtag.indexOf('W/')===0)newEtag=null;
+        if(resp.status===416||(etag&&newEtag&&newEtag!==etag)){self.mustReload=true;throw new pmtiles.EtagMismatch('Server returned non-matching ETag '+etag);}
+        if(resp.status>=300)throw Error('Bad response code: '+resp.status);
+        var cl=resp.headers.get('Content-Length');
+        if(resp.status===200&&(!cl||+cl>length)){ac.abort();throw Error('Server returned no content-length header or content-length exceeding request.');}
+        var reader=resp.body.getReader(),chunks=[],got=0;
+        function pump(){return reader.read().then(function(r){
+          if(r.done)return;chunks.push(r.value);got+=r.value.length;arm();return pump();});}
+        return pump().then(function(){
+          var out=new Uint8Array(got),p=0;chunks.forEach(function(c){out.set(c,p);p+=c.length;});
+          return {data:out.buffer,etag:newEtag||undefined,cacheControl:resp.headers.get('Cache-Control')||undefined,expires:resp.headers.get('Expires')||undefined};});
+      }).then(function(v){cleanup();return v;},function(e){
+        cleanup();
+        if(idleHit){var te=new Error('pmtiles range stalled');te.isTimeout=true;throw te;}
+        throw e;});
+    }
+    function run(){return once().catch(function(e){
+      if(e&&e.isTimeout&&attempt<MAX_RETRIES&&!(signal&&signal.aborted)){attempt++;window.__pmStats.retries++;return run();}
+      if(e&&e.isTimeout)window.__pmStats.failed++;
+      throw e;});}
+    return run();
+  };
   var protocol = new pmtiles.Protocol();
+  protocol.add(new pmtiles.PMTiles(new TimeoutSource('https://assets.redmap.dev/middle-east.pmtiles')));
+
   maplibregl.addProtocol("pmtiles", protocol.tile);
   // Backends are chosen by exact hostname. Only the dev site hosts use the dev
   // workers and the separate dev visitor counter (analytics); every other host
