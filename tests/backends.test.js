@@ -26,4 +26,7 @@ function eq(name, a, b) { if (a === b) passed++; else { failed++; console.log('F
 eq('resetProxy uses BACKENDS.live', /function resetProxy\(\) \{\s*PROXY_BASE = BACKENDS\.live;/.test(html), true);
 eq('no hardcoded api2 outside BACKENDS', (html.match(/'https:\/\/api2\.redmap\.me'/g) || []).length, 1);
 eq('no hardcoded history outside BACKENDS', (html.match(/'https:\/\/history\.redmap\.me'/g) || []).length, 1);
+['dev.redmap.me', 'abc.claude-test-lmz.pages.dev'].forEach(function (h) { eq(h + ' analytics', backendsFor(h).analytics, 'https://oref-proxy-dev.xanaxmap.workers.dev'); });
+['redmap.me', 'localhost', 'example.com', 'dev.redmap.me.evil.com'].forEach(function (h) { eq(h + ' analytics', backendsFor(h).analytics, 'https://oref-proxy.xanaxmap.workers.dev'); });
+eq('no hardcoded proxy analytics URL outside BACKENDS', (html.match(/'https:\/\/oref-proxy\.xanaxmap\.workers\.dev'/g) || []).length, 1);
 console.log(passed + ' passed, ' + failed + ' failed'); process.exit(failed ? 1 : 0);

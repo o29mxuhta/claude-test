@@ -6616,7 +6616,7 @@ document.addEventListener('DOMContentLoaded', function() {
 function trackVisit() {
     // Only send the track request if we haven't done it this session
     if (!sessionStorage.getItem('oref_visited')) {
-        fetch('https://oref-proxy.xanaxmap.workers.dev' + '/api/analytics?action=track', { method: 'POST' })
+        fetch(BACKENDS.analytics + '/api/analytics?action=track', { method: 'POST' })
             .then(function() {
                 // Mark this browser tab as tracked
                 sessionStorage.setItem('oref_visited', 'true');
@@ -6627,7 +6627,7 @@ function trackVisit() {
 
 
 function fetchAnalytics() {
-    fetch('https://oref-proxy.xanaxmap.workers.dev' + '/api/analytics')
+    fetch(BACKENDS.analytics + '/api/analytics')
         .then(function(res) { return res.json(); })
         .then(function(data) {
             console.log("📊 Analytics Data Received:", data);
@@ -6779,7 +6779,7 @@ var data = responses[0];
 
 function trackInitialVisit() {
     // This POST call includes the "?action=track" param to trigger the increment
-    fetch('https://oref-proxy.xanaxmap.workers.dev' + '/api/analytics?action=track', { method: 'POST' })
+    fetch(BACKENDS.analytics + '/api/analytics?action=track', { method: 'POST' })
         .then(function() {
             console.log("Visit tracked.");
         });
