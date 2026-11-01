@@ -669,7 +669,7 @@
     "zone_en": "HaAmakim",
     "zone_ru": "ха-Амаким (Изреэльская долина)",
     "zone_ar": "هعماكيم",
-    "countdown": 60,
+    "countdown": 90,
     "lat": 32.63534,
     "lng": 35.36067,
     "value": "אזור תעשייה אלון התבור"
@@ -954,7 +954,7 @@
     "zone_en": "HaAmakim",
     "zone_ru": "ха-Амаким (Изреэльская долина)",
     "zone_ar": "هعماكيم",
-    "countdown": 60,
+    "countdown": 90,
     "lat": 32.56808,
     "lng": 35.26696,
     "value": "אזור תעשייה מבואות הגלבוע"
@@ -1014,7 +1014,7 @@
     "zone_en": "HaMifratz (The Bay)",
     "zone_ru": "Мифрац (Хайфский залив)",
     "zone_ar": "المفراتس",
-    "countdown": 60,
+    "countdown": 90,
     "lat": 32.70378,
     "lng": 34.97156,
     "value": "אזור תעשייה ניר עציון"
@@ -1104,7 +1104,7 @@
     "zone_en": "HaAmakim",
     "zone_ru": "ха-Амаким (Изреэльская долина)",
     "zone_ar": "هعماكيم",
-    "countdown": 60,
+    "countdown": 90,
     "lat": 32.75891,
     "lng": 35.31658,
     "value": "אזור תעשייה ציפורית"
@@ -1164,7 +1164,7 @@
     "zone_en": "HaMifratz (The Bay)",
     "zone_ru": "Мифрац (Хайфский залив)",
     "zone_ar": "المفراتس",
-    "countdown": 60,
+    "countdown": 90,
     "lat": 32.86718,
     "lng": 35.0992,
     "value": "אזור תעשייה קריית ביאליק"
@@ -1285,7 +1285,7 @@
     "zone_en": "Upper Galilee",
     "zone_ru": "Верхняя Галилея",
     "zone_ar": "الجليل الأعلى",
-    "countdown": 60,
+    "countdown": 90,
     "lat": 32.8805,
     "lng": 35.09761,
     "value": "אזור תעשייה שער נעמן"
@@ -3675,7 +3675,7 @@
     "zone_en": "HaCarmel",
     "zone_ru": "Кармель",
     "zone_ar": "الكرمل",
-    "countdown": 60,
+    "countdown": 90,
     "lat": 32.72679,
     "lng": 35.09173,
     "value": "בית סוהר קישון"
@@ -3765,7 +3765,7 @@
     "zone_en": "HaMifratz (The Bay)",
     "zone_ru": "Мифрац (Хайфский залив)",
     "zone_ar": "المفراتس",
-    "countdown": 60,
+    "countdown": 90,
     "lat": 32.76879,
     "lng": 35.12516,
     "value": "בית עלמין תל רגב"
@@ -4954,7 +4954,7 @@
     "zone_en": "HaCarmel",
     "zone_ru": "Кармель",
     "zone_ar": "الكرمل",
-    "countdown": 60,
+    "countdown": 90,
     "lat": 32.72066,
     "lng": 35.01601,
     "value": "גבעת וולפסון"
@@ -5734,7 +5734,7 @@
     "zone_en": "Beit She'an Valley",
     "zone_ru": "Долина Бейт-Шеан",
     "zone_ar": "غور بيت شان",
-    "countdown": 60,
+    "countdown": 90,
     "lat": 32.51739,
     "lng": 35.53924,
     "value": "גני חוגה"
@@ -10420,7 +10420,7 @@
     "zone_en": "Beit She'an Valley",
     "zone_ru": "Долина Бейт-Шеан",
     "zone_ar": "غور بيت شان",
-    "countdown": 60,
+    "countdown": 90,
     "lat": 32.43754,
     "lng": 35.41585,
     "value": "כפר גמילה מלכישוע"
@@ -13936,7 +13936,7 @@
     "zone_en": "HaCarmel",
     "zone_ru": "Кармель",
     "zone_ar": "الكرمل",
-    "countdown": 60,
+    "countdown": 90,
     "lat": 32.64675,
     "lng": 34.96489,
     "value": "מרכז מיר'ב"
@@ -14267,7 +14267,7 @@
     "zone_en": "HaAmakim",
     "zone_ru": "ха-Амаким (Изреэльская долина)",
     "zone_ar": "هعماكيم",
-    "countdown": 60,
+    "countdown": 90,
     "lat": 32.55289,
     "lng": 35.33522,
     "value": "מתחם סקי גלבוע"
@@ -21273,7 +21273,7 @@
     "zone_en": "HaAmakim",
     "zone_ru": "ха-Амаким (Изреэльская долина)",
     "zone_ar": "هعماكيم",
-    "countdown": 60,
+    "countdown": 90,
     "lat": 32.6477,
     "lng": 35.20867,
     "value": "תחנת רכבת כפר ברוך"
@@ -21288,7 +21288,7 @@
     "zone_en": "Menashe",
     "zone_ru": "Менаше",
     "zone_ar": "مناشيه",
-    "countdown": 60,
+    "countdown": 90,
     "lat": 32.68149,
     "lng": 35.125,
     "value": "תחנת רכבת כפר יהושוע"
