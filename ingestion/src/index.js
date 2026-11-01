@@ -173,6 +173,43 @@ async function recordFinalCoverage(env, windowStartMs, markerValue) {
   console.warn('Coverage update conflict budget exhausted');
 }
 
+// --- Archive dedup keys ---
+// Extended records carry a unique numeric rid; the same rid for the same city
+// (data) is the same record. Rolling records carry no rid, so they key on
+// their content. Keys are deliberately conservative: a record is dropped only
+// when it is certainly the one already archived, so a legitimate distinct
+// record is never lost.
+function archiveRecordKey(e) {
+  if (!e || typeof e !== 'object') return null;
+  if (typeof e.rid === 'number' && typeof e.data === 'string') return 'rid:' + e.rid + '|' + e.data;
+  if (typeof e.data === 'string' && typeof e.alertDate === 'string') {
+    return 'rec:' + e.data + '|' + e.alertDate + '|' + (e.category_desc || '') +
+      '|' + (typeof e.category === 'number' ? e.category : '');
+  }
+  return null;
+}
+
+// Key set of every record already in a day file. Lines are comma-terminated
+// JSONL. A line that does not parse (older backfill shapes) still contributes
+// its raw text, so an exact repeat is caught without ever failing the window
+// over legacy content.
+function collectArchiveKeys(existingText) {
+  const keys = new Set();
+  if (!existingText) return keys;
+  for (const line of existingText.split('\n')) {
+    const t = line.trim();
+    if (!t) continue;
+    const body = t.endsWith(',') ? t.slice(0, -1) : t;
+    try {
+      const e = JSON.parse(body);
+      keys.add(archiveRecordKey(e) || 'raw:' + t);
+    } catch (err) {
+      keys.add('raw:' + t);
+    }
+  }
+  return keys;
+}
+
 // --- History entry normalization (rolling + extended documented shapes) ---
 //
 // The relay's /api2/alarms-history route aliases the rolling
@@ -361,15 +398,48 @@ export default {
 
     console.log(`Filtered: ${filtered.length} entries, dates: ${Object.keys(byDate).join(', ') || 'none'}`);
 
-    // Append to each date's JSONL file
+    // Append to each date's JSONL file, deduplicated (upstream maorcc/oref-map#69).
+    // A marker-write failure after the data write re-runs this window on the
+    // next attempt, and overlapping runs can race the read-modify-write; both
+    // used to append the same records again. Existing keys are collected from
+    // the file, already-archived records are dropped, and the write is
+    // conditional on the etag just read so a concurrent writer forces a
+    // re-read instead of a lost update.
     for (const [d, dateEntries] of Object.entries(byDate)) {
-      const existing = await env.HISTORY_BUCKET.get(`${d}.jsonl`);
-      const existingText = existing ? await existing.text() : '';
-      const newLines = dateEntries.map(e => JSON.stringify(e) + ',\n').join('');
-      await env.HISTORY_BUCKET.put(`${d}.jsonl`, existingText + newLines, {
-        httpMetadata: { contentType: 'application/jsonl' },
-      });
-      console.log(`Wrote ${d}.jsonl: ${dateEntries.length} new + ${existingText.length} bytes existing`);
+      let archived = false;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const existing = await env.HISTORY_BUCKET.get(`${d}.jsonl`);
+        const existingText = existing ? await existing.text() : '';
+        const keys = collectArchiveKeys(existingText);
+        const fresh = [];
+        for (const e of dateEntries) {
+          const k = archiveRecordKey(e) || 'raw:' + JSON.stringify(e);
+          if (keys.has(k)) continue;
+          keys.add(k);
+          fresh.push(e);
+        }
+        if (fresh.length === 0) {
+          console.log(`Wrote ${d}.jsonl: 0 new (${dateEntries.length} already archived)`);
+          archived = true;
+          break;
+        }
+        const newLines = fresh.map(e => JSON.stringify(e) + ',\n').join('');
+        const putOpts = { httpMetadata: { contentType: 'application/jsonl' } };
+        if (existing) putOpts.onlyIf = { etagMatches: existing.etag };
+        const saved = await env.HISTORY_BUCKET.put(`${d}.jsonl`, existingText + newLines, putOpts);
+        if (saved !== null) {
+          console.log(`Wrote ${d}.jsonl: ${fresh.length} new (${dateEntries.length - fresh.length} already archived) + ${existingText.length} bytes existing`);
+          archived = true;
+          break;
+        }
+        console.warn(`Concurrent modification on ${d}.jsonl - re-reading (attempt ${attempt + 1}/3)`);
+      }
+      if (!archived) {
+        // Never mark a window whose records were not durably archived.
+        console.error(`Failed to archive window ${timeslot} into ${d}.jsonl after 3 attempts - window left unprocessed`);
+        await failAttempt();
+        return;
+      }
     }
 
     // Write the timeslot marker.
