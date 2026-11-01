@@ -784,7 +784,13 @@ function updateAlertCache(name, state, since) {
         var threats = locationThreats[name] || {};
         if (state !== 'green' && threats[state] === undefined) threats[state] = since;
         if (Object.keys(threats).length === 0) delete cache[name];
-        else cache[name] = { threats: threats };
+        else {
+            cache[name] = { threats: threats };
+            // Persist threat identity too (optional field; older caches
+            // without it still load, falling back to state-level ends).
+            var parts = locationThreatParts[name];
+            if (parts) cache[name].parts = parts;
+        }
         localStorage.setItem('oref-active-alerts', JSON.stringify(cache));
     } catch(e) {}
 }
@@ -847,6 +853,10 @@ if (state === 'red' || state === 'purple') {
 // A second active threat shows as the polygon border color; when the top
 // threat ends, the next one takes over the fill.
 var locationThreats = {}; // name -> { state: sinceMs }
+var locationThreatParts = {}; // name -> { state: { threatId: sinceMs } } - threat
+    // identity within a shared display state, so a threat-specific end
+    // removes only its own threat. Display, cache and expiration keep
+    // using locationThreats; this map only refines end handling.
 
 function topThreats(name) {
     var t = locationThreats[name];
@@ -879,13 +889,27 @@ function secondThreatOf(name, displayed) {
 function applyThreatEvent(name, title, state, since) {
     var threats = locationThreats[name] || (locationThreats[name] = {});
     if (state === 'green') {
-        // Same staleness guard as setLocationState: a lagging history-feed
-        // all-clear must not kill a fresher live alert.
-        var existing = locationStates[name];
-        if (existing && existing.state !== 'green' && since && since < existing.since) return existing.state;
+        // Per-threat staleness: an end title ends only threats that STARTED
+        // before it was issued. Comparing against the single displayed entry
+        // is wrong both ways - a hidden newer threat inflates its `since` and
+        // blocks a valid all-clear, while a late backdated alert deflates it
+        // and lets a stale all-clear erase a threat that began after it.
+        // setLocationState keeps its own green-vs-newer guard, so a stale end
+        // still cannot green-out a fresh alert.
         var endThreat = explicitThreatIn(title); // null when the end names no threat
-        if (endThreat) { delete threats[endThreat]; }
-        else { for (var k in threats) delete threats[k]; }
+        if (endThreat) {
+            var endId = threatIdIn(title);
+            var parts = locationThreatParts[name] && locationThreatParts[name][endThreat];
+            if (parts && endId && parts[endId] !== undefined) {
+                if (!since || parts[endId] <= since) delete parts[endId];
+                // The shared display-state entry survives while another
+                // same-state threat is still active.
+                if (Object.keys(parts).length === 0) delete threats[endThreat];
+            } else if (!since || threats[endThreat] === undefined || threats[endThreat] <= since) {
+                delete threats[endThreat];
+            }
+        }
+        else { for (var k in threats) { if (!since || threats[k] <= since) { delete threats[k]; if (locationThreatParts[name]) delete locationThreatParts[name][k]; } } }
         var remaining = topThreats(name);
         if (remaining.length === 0) {
             delete locationThreats[name];
@@ -899,6 +923,11 @@ function applyThreatEvent(name, title, state, since) {
         return remaining[0];
     }
     threats[state] = since || Date.now();
+    var tid = threatIdIn(title);
+    if (tid) {
+        var byState = locationThreatParts[name] || (locationThreatParts[name] = {});
+        (byState[state] || (byState[state] = {}))[tid] = threats[state];
+    }
     setLocationState(name, state, since);
     return state;
 }
@@ -2071,8 +2100,9 @@ var IS_SEA = ['in', ['get', 'kind'], ['literal', ['ocean', 'sea']]];
    // as of 2026-08-26 and was checked: swapping in WARM_DARK_FLAVOR was tried,
    // on the theory that a black `earth` would make the opaque foreign-water mask
    // paint a void outside Israel, and reverted — the reported void turned out to
-   // be a basemap COVERAGE gap (PMTiles data starts near lng 30.94 while
-   // maxBounds pans west to 24.0), nothing to do with the mask or the flavor.
+   // be a basemap COVERAGE gap (PMTiles data starts near lng 30.94 while the
+   // pre-2026-11-01 maxBounds box panned west to 24.0), nothing to do with
+   // the mask or the flavor.
    // Whatever flavor is live is passed into customizeBasemapLayers, which reads
    // `flavor.earth` for the mask colour, so the mask tracks the theme either way.
    // If you do wire WARM_DARK_FLAVOR up, treat it as a look change and judge it
@@ -3792,6 +3822,17 @@ function buildPolygons(data, onReady) {
     return null;
   }
 
+  // The matched threat term itself ('ירי רקטות וטילים', ...), or null. The
+  // term is the stable identity of a threat type; two distinct threats can
+  // share a display state (rockets and non-conventional are both 'red').
+  function threatIdIn(text) {
+    if (!text) return null;
+    for (var i = 0; i < THREAT_TERMS.length; i++) {
+      if (text.indexOf(THREAT_TERMS[i].term) !== -1) return THREAT_TERMS[i].term;
+    }
+    return null;
+  }
+
   function classifyTitle(title) {
     var originalTitle = title || "";
     title = originalTitle.replace(/\s+/g, ' ').trim();
@@ -3873,6 +3914,7 @@ function loadCachedAlerts() {
 
             // Inject back into live memory
             locationThreats[name] = kept;
+            if (entry.parts) locationThreatParts[name] = entry.parts;
             var top = topThreats(name)[0];
             locationStates[name] = { state: top, since: kept[top] };
             var topStale = (top === 'hazmat' || top === 'earthquake') && (now - kept[top] > 30 * 60000);
@@ -7520,6 +7562,7 @@ function removeLocation(name) {
         delete locationStates[name];
     }
     delete locationThreats[name];
+    delete locationThreatParts[name];
     // Also drop the persisted copy, otherwise a cleared or expired alert is
     // restored as active on the next page load.
     if (typeof updateAlertCache === 'function') updateAlertCache(name, 'green', Date.now());

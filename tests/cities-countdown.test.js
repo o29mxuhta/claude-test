@@ -4,7 +4,10 @@
 //    161-locality list (https://www.idf.il/media/j1xlicjw/____________________12.pdf)
 //    must have countdown === 90;
 //  - the 15 adjacent infrastructure zones NOT explicitly named in that list
-//    must stay at 60 until a separate decision updates them;
+//    were set to 90 by the site owner's 2026-11-01 decision relying on the
+//    newer secondary source (eladnava/pikud-haoref-api cities.json @9b4ec62,
+//    which lists all 15 at 90); they are still NOT verified against the
+//    official document, and this list locks that secondary-source value;
 //  - entry count and required schema fields stay intact (no zone added,
 //    removed, or otherwise edited by the countdown update).
 // Run: node tests/cities-countdown.test.js
@@ -178,7 +181,7 @@ var VERIFIED_90 = [
   "תמרת"
 ];
 
-var HELD_AT_60 = [
+var SECONDARY_90 = [
   "אזור תעשייה אלון התבור",
   "אזור תעשייה מבואות הגלבוע",
   "אזור תעשייה ניר עציון",
@@ -215,10 +218,10 @@ VERIFIED_90.forEach(function(name) {
   if (c) assert(c.countdown === 90, name + ': countdown is 90, got ' + c.countdown);
 });
 
-HELD_AT_60.forEach(function(name) {
+SECONDARY_90.forEach(function(name) {
   var c = byValue[name];
-  assert(c, 'held zone present: ' + name);
-  if (c) assert(c.countdown === 60, name + ': held at 60 pending decision, got ' + c.countdown);
+  assert(c, 'secondary-source zone present: ' + name);
+  if (c) assert(c.countdown === 90, name + ': 90 per secondary source (not officially verified), got ' + c.countdown);
 });
 
 if (failed) { console.error(failed + ' failed, ' + passed + ' passed'); process.exit(1); }
