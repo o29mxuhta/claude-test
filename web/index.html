@@ -2132,13 +2132,13 @@ var map = new maplibregl.Map({
     zoom: Math.max(savedZoom, 6.8), 
     minZoom: 6.8, 
 
-    // Relaxed bounds: allows seeing Sinai, Jordan, and southern Lebanon, 
-    // but stops before the western void near Greece/Turkey
-    maxBounds: [
-        [31.0, 28.0], // South-West (Sinai / Eastern Mediterranean)
-        [37.5, 34.5]  // North-East (Lebanon / Syria / Jordan)
-    ],
-    
+    // NO maxBounds here, deliberately: MapLibre responds to a maxBounds box by
+    // raising the effective minZoom so the viewport always fits inside it and by
+    // hard-clamping the camera, which wedged pan/zoom completely once the
+    // viewport covered the box (map "stuck" at zoomed-out levels, desktop and
+    // mobile) and ping-ponged against the clampToAnchor move handler below into
+    // infinite setCenter recursion. The center clamp is the only pan guard.
+
     touchPitch: false,
     maxTileCacheZoomLevels: 8,
     fadeDuration: 0,
