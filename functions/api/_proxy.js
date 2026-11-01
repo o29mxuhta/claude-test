@@ -44,8 +44,22 @@ function randomFrom(hosts) {
   return hosts[Math.floor(Math.random() * hosts.length)];
 }
 
-function randomNonTlvProxy() {
-  return randomFrom(NON_TLV_PROXY_HOSTS);
+// Dev hosts redirect to the dev live worker; every other host (including
+// unknown ones) keeps the production pool.
+const DEV_PROXY_HOST = 'https://redmap-live-api-dev.xanaxmap.workers.dev';
+
+export function isDevHost(hostname) {
+  return hostname === 'dev.redmap.me' ||
+    hostname === 'claude-test-lmz.pages.dev' ||
+    /^[a-z0-9-]+\.claude-test-lmz\.pages\.dev$/.test(hostname);
+}
+
+export function proxyPoolFor(hostname) {
+  return isDevHost(hostname) ? [DEV_PROXY_HOST] : NON_TLV_PROXY_HOSTS;
+}
+
+function randomNonTlvProxy(hostname) {
+  return randomFrom(proxyPoolFor(hostname));
 }
 
 function randomTlvProxy() {
@@ -330,7 +344,7 @@ export async function orefProxy(context, { target, redirectSuffix, kind }) {
   return new Response(null, {
     status: 303,
     headers: withCors({
-      'Location': buildRedirectLocation(randomNonTlvProxy(), redirectSuffix, context.request.url),
+      'Location': buildRedirectLocation(randomNonTlvProxy(url.hostname), redirectSuffix, context.request.url),
       'X-CF-Colo': colo,
     }),
   });
