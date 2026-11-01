@@ -181,10 +181,12 @@ async function recordFinalCoverage(env, windowStartMs, markerValue) {
 // record is never lost.
 function archiveRecordKey(e) {
   if (!e || typeof e !== 'object') return null;
-  if (typeof e.rid === 'number' && typeof e.data === 'string') return 'rid:' + e.rid + '|' + e.data;
+  // rid 0 is the feed's missing-ID sentinel, not a unique id: fall through to
+  // the content key so distinct zero-ID alerts are never collapsed.
+  if (typeof e.rid === 'number' && e.rid !== 0 && typeof e.data === 'string') return 'rid:' + e.rid + '|' + e.data;
   if (typeof e.data === 'string' && typeof e.alertDate === 'string') {
     return 'rec:' + e.data + '|' + e.alertDate + '|' + (e.category_desc || '') +
-      '|' + (typeof e.category === 'number' ? e.category : '');
+      '|' + (typeof e.category === 'number' ? e.category : '') + '|' + (e.desc || '');
   }
   return null;
 }
@@ -388,6 +390,12 @@ export default {
 
     filtered.sort((a, b) => a.alertDate < b.alertDate ? -1 : a.alertDate > b.alertDate ? 1 : 0);
 
+    // The marker counts this window's DISTINCT archived records: duplicate
+    // records in the payload are archived once, so the raw filtered count
+    // would inflate the marker and the alert-check log.
+    const distinctKeys = new Set();
+    for (const e of filtered) distinctKeys.add(archiveRecordKey(e) || 'raw:' + JSON.stringify(e));
+
     // Group by R2 date key (events 23:xx go to next day's file)
     const byDate = {};
     for (const e of filtered) {
@@ -407,6 +415,7 @@ export default {
     // re-read instead of a lost update.
     for (const [d, dateEntries] of Object.entries(byDate)) {
       let archived = false;
+      try {
       for (let attempt = 0; attempt < 3; attempt++) {
         const existing = await env.HISTORY_BUCKET.get(`${d}.jsonl`);
         const existingText = existing ? await existing.text() : '';
@@ -438,6 +447,13 @@ export default {
         }
         console.warn(`Concurrent modification on ${d}.jsonl - re-reading (attempt ${attempt + 1}/3)`);
       }
+      } catch (err) {
+        // A rejected read/write must not leave a 'pending-quiet' marker to be
+        // classified quiet: downgrade it so the window is retried.
+        console.error(`Archive operation failed for ${d}.jsonl: ${err && err.message}`);
+        await failAttempt();
+        return;
+      }
       if (!archived) {
         // Never mark a window whose records were not durably archived.
         console.error(`Failed to archive window ${timeslot} into ${d}.jsonl after 3 attempts - window left unprocessed`);
@@ -447,7 +463,7 @@ export default {
     }
 
     // Write the timeslot marker.
-    //  - Records archived: the marker is the count (final for this window).
+    //  - Records archived: the marker is the distinct count (final for this window).
     //  - No records in this window: an empty window is INFERRED, never
     //    verified - a valid real-time "nothing active" answer cannot prove a
     //    past window was quiet, and a non-empty answer elsewhere in the feed
@@ -468,9 +484,9 @@ export default {
       console.log(`Marker written: meta/${timeslot} (pending-quiet)`);
       return;
     }
-    await env.HISTORY_BUCKET.put(`meta/${timeslot}`, `${filtered.length}`, {
+    await env.HISTORY_BUCKET.put(`meta/${timeslot}`, `${distinctKeys.size}`, {
       httpMetadata: { contentType: 'text/plain' },
     });
-    console.log(`Marker written: meta/${timeslot} (${filtered.length} entries)`);
+    console.log(`Marker written: meta/${timeslot} (${distinctKeys.size} entries)`);
   },
 };

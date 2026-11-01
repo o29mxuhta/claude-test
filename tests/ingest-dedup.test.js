@@ -105,6 +105,7 @@ function lines(bucket, key) {
   var b4 = makeBucket();
   await run(worker, b4, [ext(104, 'עפולה', '13:47:15'), ext(104, 'עפולה', '13:47:15')]);
   assert(lines(b4, DAY_KEY).length === 1, 'same rid+city twice in payload -> 1 line, got ' + lines(b4, DAY_KEY).length);
+  assert(b4.store.get(MARKER_KEY) === '1', 'marker counts distinct archived records (1), got ' + b4.store.get(MARKER_KEY));
 
   section('5. Rolling record (no rid) repeated across attempts is archived once');
   var b5 = makeBucket();
@@ -135,6 +136,35 @@ function lines(bucket, key) {
   assert((lines(b7b, DAY_KEY).join('\n').match(/"rid":101/g) || []).length === 1,
     'rid 101 archived exactly once after create race');
   assert(b7b.store.get(MARKER_KEY) === '1', 'marker written after create-race recovery');
+
+  section('8. rid 0 is a missing-ID sentinel, not a dedup key');
+  var b8 = makeBucket();
+  await run(worker, b8, [
+    { data: 'עפולה', alertDate: '2026-11-01T13:47:15', category_desc: 'ירי רקטות וטילים', rid: 0 },
+    { data: 'עפולה', alertDate: '2026-11-01T13:47:16', category_desc: 'ירי רקטות וטילים', rid: 0 },
+  ]);
+  assert(lines(b8, DAY_KEY).length === 2, 'two distinct zero-rid records both archived, got ' + lines(b8, DAY_KEY).length);
+  b8.store.delete(MARKER_KEY);
+  await run(worker, b8, [{ data: 'עפולה', alertDate: '2026-11-01T13:47:15', category_desc: 'ירי רקטות וטילים', rid: 0 }]);
+  assert(lines(b8, DAY_KEY).length === 2, 'identical zero-rid record still deduped on retry, got ' + lines(b8, DAY_KEY).length);
+
+  section('9. Rolling records differing only in desc are distinct');
+  var b9 = makeBucket();
+  await run(worker, b9, [
+    { data: 'עפולה', alertDate: '2026-11-01 13:52:40', title: 'ירי רקטות וטילים', category: 1, desc: 'ירי רקטות וטילים - אירוע ראשון' },
+    { data: 'עפולה', alertDate: '2026-11-01 13:52:40', title: 'ירי רקטות וטילים', category: 1, desc: 'ירי רקטות וטילים - אירוע שני' },
+  ]);
+  assert(lines(b9, DAY_KEY).length === 2, 'different desc -> both archived, got ' + lines(b9, DAY_KEY).length);
+
+  section('10. Archive failure downgrades pending-quiet to error');
+  var b10 = makeBucket({ 'meta/2026-11-01T13:45': 'pending-quiet' });
+  var realPut10 = b10.put;
+  b10.put = async function (key, value, opts) {
+    if (key.slice(-6) === '.jsonl') throw new Error('R2 unavailable');
+    return realPut10(key, value, opts);
+  };
+  await run(worker, b10, [ext(105, 'עפולה', '13:47:15')]);
+  assert(b10.store.get(MARKER_KEY) === 'error', 'pending-quiet downgraded to error after archive failure, got ' + b10.store.get(MARKER_KEY));
 
   section('7. Concurrent writer forces re-read, records still archived once');
   var b7 = makeBucket();
