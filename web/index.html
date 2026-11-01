@@ -2071,8 +2071,9 @@ var IS_SEA = ['in', ['get', 'kind'], ['literal', ['ocean', 'sea']]];
    // as of 2026-08-26 and was checked: swapping in WARM_DARK_FLAVOR was tried,
    // on the theory that a black `earth` would make the opaque foreign-water mask
    // paint a void outside Israel, and reverted — the reported void turned out to
-   // be a basemap COVERAGE gap (PMTiles data starts near lng 30.94 while
-   // maxBounds pans west to 24.0), nothing to do with the mask or the flavor.
+   // be a basemap COVERAGE gap (PMTiles data starts near lng 30.94 while the
+   // pre-2026-11-01 maxBounds box panned west to 24.0), nothing to do with
+   // the mask or the flavor.
    // Whatever flavor is live is passed into customizeBasemapLayers, which reads
    // `flavor.earth` for the mask colour, so the mask tracks the theme either way.
    // If you do wire WARM_DARK_FLAVOR up, treat it as a look change and judge it
