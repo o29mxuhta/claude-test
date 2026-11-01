@@ -1542,11 +1542,11 @@ try {
   // Set PROXY_BASE to the Cloudflare Worker URL for production, e.g.:
   //   var PROXY_BASE = 'https://oref-proxy.YOUR_ACCOUNT.workers.dev';
   var ANALYTICS_POLL_MS = 30000;
-  var ANALYTICS_URL = '/api/analytics';
   var protocol = new pmtiles.Protocol();
   maplibregl.addProtocol("pmtiles", protocol.tile);
   // Backends are chosen by exact hostname. Only the dev site hosts use the dev
-  // workers; every other host (including unknown ones) uses production.
+  // workers and the separate dev visitor counter (analytics); every other host
+  // (including unknown ones) uses production.
   var BACKENDS = (function () {
     var host = location.hostname;
     var isDevHost = host === 'dev.redmap.me' ||
