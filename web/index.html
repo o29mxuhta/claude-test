@@ -1542,11 +1542,31 @@ try {
   // Set PROXY_BASE to the Cloudflare Worker URL for production, e.g.:
   //   var PROXY_BASE = 'https://oref-proxy.YOUR_ACCOUNT.workers.dev';
   var ANALYTICS_POLL_MS = 30000;
-  var ANALYTICS_URL = '/api/analytics';
   var protocol = new pmtiles.Protocol();
   maplibregl.addProtocol("pmtiles", protocol.tile);
-  var HISTORY_BASE = 'https://history.redmap.me';
-  var PROXY_BASE = 'https://api2.redmap.me'; 
+  // Backends are chosen by exact hostname. Only the dev site hosts use the dev
+  // workers and the separate dev visitor counter (analytics); every other host
+  // (including unknown ones) uses production.
+  var BACKENDS = (function () {
+    var host = location.hostname;
+    var isDevHost = host === 'dev.redmap.me' ||
+      host === 'claude-test-lmz.pages.dev' ||
+      /^[a-z0-9-]+\.claude-test-lmz\.pages\.dev$/.test(host);
+    if (isDevHost) {
+      return {
+        history: 'https://redmap-history-api-dev.xanaxmap.workers.dev',
+        live: 'https://redmap-live-api-dev.xanaxmap.workers.dev',
+        analytics: 'https://oref-proxy-dev.xanaxmap.workers.dev'
+      };
+    }
+    return {
+      history: 'https://history.redmap.me',
+      live: 'https://api2.redmap.me',
+      analytics: 'https://oref-proxy.xanaxmap.workers.dev'
+    };
+  })();
+  var HISTORY_BASE = BACKENDS.history;
+  var PROXY_BASE = BACKENDS.live; 
 
 // 2. Adjust this if your custom proxy uses a different route path (or leave empty if it handles endpoints at the root)
 var apiPrefix = '/api'; 
@@ -1602,7 +1622,7 @@ function apiFetch(endpoint) {
 
   
   function resetProxy() {
-    PROXY_BASE = 'https://api2.redmap.me';
+    PROXY_BASE = BACKENDS.live;
     apiPrefix = '/api';
 }
    
@@ -6596,7 +6616,7 @@ document.addEventListener('DOMContentLoaded', function() {
 function trackVisit() {
     // Only send the track request if we haven't done it this session
     if (!sessionStorage.getItem('oref_visited')) {
-        fetch('https://oref-proxy.xanaxmap.workers.dev' + '/api/analytics?action=track', { method: 'POST' })
+        fetch(BACKENDS.analytics + '/api/analytics?action=track', { method: 'POST' })
             .then(function() {
                 // Mark this browser tab as tracked
                 sessionStorage.setItem('oref_visited', 'true');
@@ -6607,7 +6627,7 @@ function trackVisit() {
 
 
 function fetchAnalytics() {
-    fetch('https://oref-proxy.xanaxmap.workers.dev' + '/api/analytics')
+    fetch(BACKENDS.analytics + '/api/analytics')
         .then(function(res) { return res.json(); })
         .then(function(data) {
             console.log("📊 Analytics Data Received:", data);
@@ -6759,7 +6779,7 @@ var data = responses[0];
 
 function trackInitialVisit() {
     // This POST call includes the "?action=track" param to trigger the increment
-    fetch('https://oref-proxy.xanaxmap.workers.dev' + '/api/analytics?action=track', { method: 'POST' })
+    fetch(BACKENDS.analytics + '/api/analytics?action=track', { method: 'POST' })
         .then(function() {
             console.log("Visit tracked.");
         });
