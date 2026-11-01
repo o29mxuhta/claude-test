@@ -1545,8 +1545,28 @@ try {
   var ANALYTICS_URL = '/api/analytics';
   var protocol = new pmtiles.Protocol();
   maplibregl.addProtocol("pmtiles", protocol.tile);
-  var HISTORY_BASE = 'https://history.redmap.me';
-  var PROXY_BASE = 'https://api2.redmap.me'; 
+  // Backends are chosen by exact hostname. Only the dev site hosts use the dev
+  // workers; every other host (including unknown ones) uses production.
+  var BACKENDS = (function () {
+    var host = location.hostname;
+    var isDevHost = host === 'dev.redmap.me' ||
+      host === 'claude-test-lmz.pages.dev' ||
+      /^[a-z0-9-]+\.claude-test-lmz\.pages\.dev$/.test(host);
+    if (isDevHost) {
+      return {
+        history: 'https://redmap-history-api-dev.xanaxmap.workers.dev',
+        live: 'https://redmap-live-api-dev.xanaxmap.workers.dev',
+        analytics: 'https://oref-proxy-dev.xanaxmap.workers.dev'
+      };
+    }
+    return {
+      history: 'https://history.redmap.me',
+      live: 'https://api2.redmap.me',
+      analytics: 'https://oref-proxy.xanaxmap.workers.dev'
+    };
+  })();
+  var HISTORY_BASE = BACKENDS.history;
+  var PROXY_BASE = BACKENDS.live; 
 
 // 2. Adjust this if your custom proxy uses a different route path (or leave empty if it handles endpoints at the root)
 var apiPrefix = '/api'; 
@@ -1602,7 +1622,7 @@ function apiFetch(endpoint) {
 
   
   function resetProxy() {
-    PROXY_BASE = 'https://api2.redmap.me';
+    PROXY_BASE = BACKENDS.live;
     apiPrefix = '/api';
 }
    
