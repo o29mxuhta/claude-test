@@ -39,6 +39,7 @@ class Launcher(unittest.TestCase):
         open(fake,'w').write('#!/bin/sh\nprintf "%%s\\n" "$@" > %s\nsleep 1\n'%argv);os.chmod(fake,0o755)
         subprocess.run([NODE,'dump_style_layers.mjs','http://127.0.0.1:1/','o.json',fake],cwd=D,capture_output=True,text=True,timeout=40)
         a=open(argv).read().split('\n')
+        self.assertIn('--remote-debugging-port=0',a)   # Chrome picks its own free port: parallel runs cannot collide
         self.assertIn('--headless=new',a);self.assertNotIn('--no-sandbox',a);self.assertIn('--remote-debugging-address=127.0.0.1',a)
     @unittest.skipUnless(CHROME,'google-chrome not installed')
     def test_chrome_really_starts_with_sandbox(self):
@@ -53,3 +54,28 @@ class Launcher(unittest.TestCase):
         finally:
             p.kill();shutil.rmtree(d,ignore_errors=True)
 if __name__=='__main__':unittest.main()
+
+PAGE=b"""<!doctype html><body><script>
+var th=localStorage.getItem('oref-theme')||'dark';
+if(th==='dark')document.body.classList.add('dark');
+window.map={isStyleLoaded:function(){return true},getStyle:function(){return {layers:[{id:'bg-'+th,type:'fill',source:'protomaps','source-layer':'earth'}]}}};
+</script></body>"""
+@unittest.skipUnless(NODE and CHROME,'node/google-chrome not installed')
+class ParallelDumps(unittest.TestCase):
+    def test_two_parallel_dumps_do_not_interfere(self):
+        import http.server,threading
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(s):
+                s.send_response(200);s.send_header('Content-Type','text/html');s.end_headers();s.wfile.write(PAGE)
+            def log_message(*a):pass
+        srv=http.server.ThreadingHTTPServer(('127.0.0.1',0),H);threading.Thread(target=srv.serve_forever,daemon=True).start()
+        url='http://127.0.0.1:%d/'%srv.server_address[1];tmp=tempfile.mkdtemp()
+        try:
+            ps=[subprocess.Popen([NODE,'dump_style_layers.mjs',url,os.path.join(tmp,'o%d.json'%i)],cwd=D,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True) for i in range(3)]
+            for p in ps:
+                o,e=p.communicate(timeout=100);self.assertEqual(p.returncode,0,e+o)
+            for i in range(3):
+                ids=sorted(l['id'] for l in json.load(open(os.path.join(tmp,'o%d.json'%i))))
+                self.assertEqual(ids,['bg-dark','bg-light'])      # both themes captured by every run
+        finally:
+            srv.shutdown();shutil.rmtree(tmp,ignore_errors=True)

@@ -9,13 +9,16 @@ import {parseArgs,chromeArgs} from './dsl_args.mjs';
 let cfg;try{cfg=parseArgs(process.argv.slice(2))}catch(e){console.error(e.message);process.exit(2)}
 const {url,out,chrome,extra,insecureNoSandbox}=cfg;
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-const port=9300+Math.floor(Math.random()*500),dir=fs.mkdtempSync('/tmp/dsl-');
-const ch=spawn(chrome,chromeArgs({port,dir,extra,insecureNoSandbox}),{stdio:'ignore'});
+// Chrome picks a free DevTools port itself (port 0) and reports it in <profile>/DevToolsActivePort. The profile dir is private to
+// this run (mkdtemp), so the port we read always belongs to the Chrome we spawned, and parallel runs cannot attach to each other.
+const dir=fs.mkdtempSync('/tmp/dsl-');
+const ch=spawn(chrome,chromeArgs({port:0,dir,extra,insecureNoSandbox}),{stdio:'ignore'});
+let exited=false;ch.on('exit',()=>{exited=true});
 const cleanup=()=>{try{ch.kill()}catch(e){}try{fs.rmSync(dir,{recursive:true,force:true})}catch(e){}};
 process.on('exit',cleanup);process.on('SIGINT',()=>process.exit(130));
 ch.on('error',e=>{console.error('cannot start Chrome: '+e.message);process.exit(1)});
-let t;for(let i=0;i<50;i++){try{t=await (await fetch(`http://127.0.0.1:${port}/json`)).json();if(t[0])break}catch(e){}await sleep(200)}
-if(!t){console.error('Chrome did not start (is the sandbox usable here? see --insecure-no-sandbox in the header)');process.exit(1)}
+let port,t;for(let i=0;i<100&&!exited;i++){try{port=Number(fs.readFileSync(dir+'/DevToolsActivePort','utf8').split('\n')[0]);if(!port){await sleep(200);continue}t=await (await fetch(`http://127.0.0.1:${port}/json`)).json();if(t[0])break}catch(e){}await sleep(200)}
+if(!t||!t.find(x=>x.type==='page'&&x.webSocketDebuggerUrl.startsWith(`ws://127.0.0.1:${port}/`))){console.error('Chrome did not start (is the sandbox usable here? see --insecure-no-sandbox in the header)');process.exit(1)}
 const ws=new WebSocket(t.find(x=>x.type==='page').webSocketDebuggerUrl);await new Promise(r=>ws.onopen=r);
 let id=0;const pend={};
 const send=(m,p={})=>new Promise(r=>{const i=++id;pend[i]=r;ws.send(JSON.stringify({id:i,method:m,params:p}))});

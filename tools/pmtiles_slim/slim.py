@@ -29,16 +29,16 @@ def slim_tile(t,z):
     while p<len(raw):
         st=p;k,p=vi(raw,p);f,w=k>>3,k&7
         if w==2:
-            l,p=vi(raw,p);body=raw[p:p+l];p+=l
+            body,p=ld(raw,p);l=len(body)
             if f!=3:
                 out+=raw[st:p];continue
-            q=0;kk,q=vi(body,q);ll,q=vi(body,q);nm=body[q:q+ll].decode()
+            q=0;kk,q=vi(body,q);nmb,q=ld(body,q);nm=nmb.decode()
             keys,vals,feats=parse_layer(body)
             nb=bytearray();q=0;kept=0;tot=0
             while q<len(body):
                 s2=q;k2,q=vi(body,q);f2,w2=k2>>3,k2&7
                 if w2==2:
-                    l2,q=vi(body,q);sub=body[q:q+l2];q+=l2
+                    sub,q=ld(body,q);l2=len(sub)
                     if f2==2:
                         tot+=1
                         tags,gt=feat(sub)
@@ -47,11 +47,8 @@ def slim_tile(t,z):
                         if not keepfeat(nm,pr,gt,z):continue
                         kept+=1
                     nb+=body[s2:q]
-                elif w2==0:
-                    _,q=vi(body,q);nb+=body[s2:q]
-                elif w2==5:q+=4;nb+=body[s2:q]
-                elif w2==1:q+=8;nb+=body[s2:q]
-                else:raise ValueError('unsupported wire type %d in layer'%w2)
+                else:
+                    q=skip(body,q,w2);nb+=body[s2:q]
             stats[nm]=(tot,kept)
             if kept==0 and nm!='earth':continue
             # varint of length
@@ -61,11 +58,8 @@ def slim_tile(t,z):
                 if n:v.append(b|128)
                 else:v.append(b);break
             out+=raw[st:st+1]+bytes(v)+nb
-        elif w==0:
-            _,p=vi(raw,p);out+=raw[st:p]
-        elif w==5:p+=4;out+=raw[st:p]
-        elif w==1:p+=8;out+=raw[st:p]
-        else:raise ValueError('unsupported wire type %d in tile'%w)
+        else:
+            p=skip(raw,p,w);out+=raw[st:p]
     return gzip.compress(bytes(out),9,mtime=0),stats
 if __name__=='__main__':
     z=int(sys.argv[1]);lon,lat=float(sys.argv[2]),float(sys.argv[3]);rx,ry=int(sys.argv[4]),int(sys.argv[5])

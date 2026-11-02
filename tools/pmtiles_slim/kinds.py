@@ -8,7 +8,7 @@ def parse_layer(body):
     while q<len(body):
         kk,q=vi(body,q);f,w=kk>>3,kk&7
         if w==2:
-            l,q=vi(body,q);sub=body[q:q+l];q+=l
+            sub,q=ld(body,q);l=len(sub)
             if f==3:keys.append(sub.decode())
             elif f==4:
                 # value msg: string_value field1
@@ -16,29 +16,28 @@ def parse_layer(body):
                 while p<len(sub):
                     k2,p=vi(sub,p);f2,w2=k2>>3,k2&7
                     if w2==2:
-                        ll,p=vi(sub,p);v=sub[p:p+ll].decode('utf8','replace');p+=ll
+                        sv,p=ld(sub,p);v=sv.decode('utf8','replace')
                     elif w2==0:
                         v,p=vi(sub,p)
-                    elif w2==5:p+=4;v='f'
-                    elif w2==1:p+=8;v='d'
+                    elif w2==5:p=skip(sub,p,5);v='f'
+                    elif w2==1:p=skip(sub,p,1);v='d'
+                    else:p=skip(sub,p,w2)
                 vals.append(v)
             elif f==2:feats.append(sub)
-        elif w==0:_,q=vi(body,q)
-        elif w==5:q+=4
-        elif w==1:q+=8
+        else:q=skip(body,q,w)
     return keys,vals,feats
 def feat_tags(fb):
     p=0;tags=[];gl=0
     while p<len(fb):
         k,p=vi(fb,p);f,w=k>>3,k&7
         if w==2:
-            l,p=vi(fb,p);sub=fb[p:p+l];p+=l
+            sub,p=ld(fb,p);l=len(sub)
             if f==2:
                 q=0
                 while q<len(sub):
                     v,q=vi(sub,q);tags.append(v)
             elif f==4:gl=l
-        elif w==0:_,p=vi(fb,p)
+        else:p=skip(fb,p,w)
     return tags,gl
 def tile_layers(t):
     b=gzip.decompress(t) if t[:2]==b'\x1f\x8b' else t
@@ -46,14 +45,14 @@ def tile_layers(t):
     while p<len(b):
         k,p=vi(b,p);f,w=k>>3,k&7
         if w==2:
-            l,p=vi(b,p);body=b[p:p+l];p+=l
+            body,p=ld(b,p);l=len(body)
             if f==3:
                 q=0
                 nm=None
                 # name
-                kk,q=vi(body,q);ll,q=vi(body,q);nm=body[q:q+ll].decode()
+                kk,q=vi(body,q);nmb,q=ld(body,q);nm=nmb.decode()
                 out[nm]=body
-        elif w==0:_,p=vi(b,p)
+        else:p=skip(b,p,w)
     return out
 if __name__=='__main__':
     z=int(sys.argv[1]);lay=sys.argv[2];cx,cy=lonlat2tile(34.9,31.4,z)

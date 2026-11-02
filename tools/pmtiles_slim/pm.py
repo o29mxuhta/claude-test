@@ -20,8 +20,27 @@ def dec(b,c):
 def vi(b,p):
     r=0;s=0
     while True:
+        if p>=len(b):raise ValueError('truncated varint')
+        if s>63:raise ValueError('varint longer than 10 bytes')
         x=b[p];p+=1;r|=(x&127)<<s;s+=7
         if x<128:return r,p
+def ld(b,p):
+    """Read one length-delimited payload: returns (bytes, new_p); raises if the length overruns the buffer."""
+    l,p=vi(b,p)
+    if p+l>len(b):raise ValueError('truncated length-delimited field')
+    return b[p:p+l],p+l
+def skip(b,p,w):
+    """Advance past one field of wire type w (the tag is already consumed). Every protobuf parser in this tool
+    uses it for fields it does not read, so the cursor always advances or parsing stops with an error:
+    groups (wire types 3/4) and unknown wire types raise instead of looping forever; truncation raises."""
+    if w==0:return vi(b,p)[1]
+    if w==1:n=8
+    elif w==5:n=4
+    elif w==2:
+        l,p=vi(b,p);n=l
+    else:raise ValueError('unsupported protobuf wire type %d'%w)
+    if p+n>len(b):raise ValueError('truncated protobuf field')
+    return p+n
 def readdir(b):
     n,p=vi(b,0);e=[];last=0
     ids=[]
@@ -95,21 +114,17 @@ def layers(b):
     while p<len(b):
         k,p=vi(b,p);fn,wt=k>>3,k&7
         if wt==2:
-            l,p=vi(b,p);body=b[p:p+l];p+=l
+            body,p=ld(b,p);l=len(body)
             if fn==3:
                 q=0;name=None
                 while q<len(body):
                     kk,q=vi(body,q);f2,w2=kk>>3,kk&7
                     if w2==2:
-                        ll,q=vi(body,q)
-                        if f2==1 and name is None: name=body[q:q+ll].decode()
-                        q+=ll
-                    elif w2==0: _,q=vi(body,q)
-                    elif w2==5:q+=4
-                    elif w2==1:q+=8
+                        nb2,q=ld(body,q)
+                        if f2==1 and name is None: name=nb2.decode()
+                    else: q=skip(body,q,w2)
                 out[name]=l
-        elif wt==0: _,p=vi(b,p)
-        else: break
+        else: p=skip(b,p,wt)
     return out,len(b)
 def lonlat2tile(lon,lat,z):
     n=2**z;x=int((lon+180)/360*n);y=int((1-math.asinh(math.tan(math.radians(lat)))/math.pi)/2*n);return x,y

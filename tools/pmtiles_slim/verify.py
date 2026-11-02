@@ -1,16 +1,17 @@
 import struct,gzip,collections
 from full import load,idz
-from pm import vi
+from pm import vi,skip
 def split(raw):
     p=0;out=[]
     while p<len(raw):
         k,p=vi(raw,p);f,w=k>>3,k&7
         if w==2:
-            l,p=vi(raw,p);out.append((f,raw[p:p+l]));p+=l
+            pl,p=ld(raw,p);out.append((f,pl))
         elif w==0:
             s=p;_,p=vi(raw,p);out.append((f,('v',raw[s:p])))
-        elif w==5:out.append((f,('f4',raw[p:p+4])));p+=4
-        else:out.append((f,('f8',raw[p:p+8])));p+=8
+        elif w==5:out.append((f,('f4',raw[p:p+4])));p=skip(raw,p,5)
+        elif w==1:out.append((f,('f8',raw[p:p+8])));p=skip(raw,p,1)
+        else:p=skip(raw,p,w)   # groups / unknown wire types raise
     return out
 def layers(t):
     raw=gzip.decompress(t) if t[:2]==b'\x1f\x8b' else t

@@ -7,37 +7,36 @@ def parse_value(sub):
     while p<len(sub):
         k,p=vi(sub,p);f,w=k>>3,k&7
         if w==2:
-            l,p=vi(sub,p);v=sub[p:p+l].decode('utf8','replace');p+=l
+            sv,p=ld(sub,p);v=sv.decode('utf8','replace')
         elif w==0:
             x,p=vi(sub,p)
             if f==7:v=bool(x)
             elif f==6:v=(x>>1)^-(x&1)
             elif f==4:v=x-(1<<64) if x>=(1<<63) else x  # int_value is a two's-complement int64
             else:v=x
-        elif w==5:v=struct.unpack('<f',sub[p:p+4])[0];p+=4
-        elif w==1:v=struct.unpack('<d',sub[p:p+8])[0];p+=8
+        elif w==5:e=skip(sub,p,5);v=struct.unpack('<f',sub[p:e])[0];p=e
+        elif w==1:e=skip(sub,p,1);v=struct.unpack('<d',sub[p:e])[0];p=e
+        else:p=skip(sub,p,w)   # groups / unknown wire types raise
     return v
 def parse_layer(body):
     keys=[];vals=[];feats=[]
     q=0
-    kk,q=vi(body,q);ll,q=vi(body,q);q+=ll
+    kk,q=vi(body,q);_,q=ld(body,q)
     while q<len(body):
         kk,q=vi(body,q);f,w=kk>>3,kk&7
         if w==2:
-            l,q=vi(body,q);sub=body[q:q+l];q+=l
+            sub,q=ld(body,q);l=len(sub)
             if f==3:keys.append(sub.decode())
             elif f==4:vals.append(parse_value(sub))
             elif f==2:feats.append(sub)
-        elif w==0:_,q=vi(body,q)
-        elif w==5:q+=4
-        elif w==1:q+=8
+        else:q=skip(body,q,w)
     return keys,vals,feats
 def feat(fb):
     p=0;tags=[];gt=0
     while p<len(fb):
         k,p=vi(fb,p);f,w=k>>3,k&7
         if w==2:
-            l,p=vi(fb,p);sub=fb[p:p+l];p+=l
+            sub,p=ld(fb,p);l=len(sub)
             if f==2:
                 q=0
                 while q<len(sub):
@@ -45,6 +44,7 @@ def feat(fb):
         elif w==0:
             x,p=vi(fb,p)
             if f==3:gt=x
+        else:p=skip(fb,p,w)
     return tags,gt
 def teq(a,b):
     # MapLibre-style typed equality: a boolean never equals a number or string
