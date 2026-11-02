@@ -1586,7 +1586,14 @@ try {
     return run();
   };
   var protocol = new pmtiles.Protocol();
-  protocol.add(new pmtiles.PMTiles(new TimeoutSource('https://assets.redmap.dev/middle-east.pmtiles')));
+  var PMTILES_ORIGINAL_URL = 'https://assets.redmap.dev/middle-east.pmtiles';
+  // Dev trial: slimmed archive (same features the style draws, see tools/pmtiles_slim). Exact host only;
+  // prod, previews and every unknown host keep the original archive. Revert this line to roll back.
+  var PMTILES_HTTP_URL = location.hostname === 'dev.redmap.me'
+    ? 'https://assets.redmap.dev/middle-east.slim-20261102.pmtiles'
+    : PMTILES_ORIGINAL_URL;
+  // The pmtiles protocol finds this source by its URL string: PMTILES_URL below must use the same value.
+  protocol.add(new pmtiles.PMTiles(new TimeoutSource(PMTILES_HTTP_URL)));
 
   maplibregl.addProtocol("pmtiles", protocol.tile);
   // Backends are chosen by exact hostname. Only the dev site hosts use the dev
@@ -2215,7 +2222,7 @@ var IS_SEA = ['in', ['get', 'kind'], ['literal', ['ocean', 'sea']]];
     null, true
   );
 
-  var PMTILES_URL = 'pmtiles://https://assets.redmap.dev/middle-east.pmtiles';
+  var PMTILES_URL = 'pmtiles://' + PMTILES_HTTP_URL;
   var MAP_STYLE = buildMapStyle(isDarkActive, currentLang);
 
 var map = new maplibregl.Map({
