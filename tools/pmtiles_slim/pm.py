@@ -3,14 +3,18 @@ URL='https://assets.redmap.dev/middle-east.pmtiles'
 def rng(o,n):
     r=urllib.request.Request(URL,headers={'Range':f'bytes={o}-{o+n-1}','Origin':'https://dev.redmap.me','Referer':'https://dev.redmap.me/','User-Agent':'Mozilla/5.0 Chrome/130'})
     return urllib.request.urlopen(r).read()
-H=rng(0,16384)
-assert H[:7]==b'PMTiles'
-f=struct.unpack('<QQQQQQQQQQQBBBBBiiiiBii',H[8:8+119]) if False else None
-rd=lambda o:struct.unpack('<Q',H[o:o+8])[0]
-root_off,root_len,meta_off,meta_len,leaf_off,leaf_len,data_off,data_len=[rd(8+8*i) for i in range(8)]
-ic,tc,tt=H[97],H[98],H[99]
-minz,maxz=H[100],H[101]
-print('hdr',dict(root=(root_off,root_len),leaf=(leaf_off,leaf_len),data=(data_off,data_len),int_comp=ic,tile_comp=tc,type=tt,minz=minz,maxz=maxz))
+H=root_off=root_len=meta_off=meta_len=leaf_off=leaf_len=data_off=data_len=ic=tc=tt=minz=maxz=root=None
+def init():
+    """Read the remote archive header on first use, so importing this module needs no network."""
+    global H,root_off,root_len,meta_off,meta_len,leaf_off,leaf_len,data_off,data_len,ic,tc,tt,minz,maxz,root
+    if H is not None:return
+    H=rng(0,16384)
+    assert H[:7]==b'PMTiles'
+    rd=lambda o:struct.unpack('<Q',H[o:o+8])[0]
+    root_off,root_len,meta_off,meta_len,leaf_off,leaf_len,data_off,data_len=[rd(8+8*i) for i in range(8)]
+    ic,tc,tt=H[97],H[98],H[99]
+    minz,maxz=H[100],H[101]
+    root=readdir(dec(H[root_off:root_off+root_len],ic)) if root_off+root_len<=len(H) else readdir(dec(rng(root_off,root_len),ic))
 def dec(b,c):
     return gzip.decompress(b) if c==2 else b
 def vi(b,p):
@@ -59,7 +63,6 @@ def xyz2id(z,x,y):
             xx,yy=yy,xx
         s//=2
     return acc+d
-root=readdir(dec(H[root_off:root_off+root_len],ic)) if root_off+root_len<=len(H) else readdir(dec(rng(root_off,root_len),ic))
 def find(entries,tid):
     lo,hi=0,len(entries)-1
     while lo<=hi:
@@ -74,6 +77,7 @@ def find(entries,tid):
     return None
 cache={}
 def gettile(z,x,y):
+    init()
     tid=xyz2id(z,x,y);ents=root
     for depth in range(4):
         r=find(ents,tid)
@@ -84,6 +88,7 @@ def gettile(z,x,y):
         if key not in cache: cache[key]=readdir(dec(rng(leaf_off+e[2],e[3]),ic))
         ents=cache[key]
 def layers(b):
+    init()
     b=dec(b,tc) if tc==2 else b
     if b[:2]==b'\x1f\x8b': b=gzip.decompress(b)
     p=0;out={}

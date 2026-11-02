@@ -15,6 +15,12 @@ Pipeline (pure Python 3 stdlib, run inside this directory):
    header fields and metadata JSON byte-identical (only offsets/counts change).
 4. `python3 verify.py` - integrity: all tiles parse, kept features are byte-identical subsets
    in original order, layer tables identical, directory/IDs/runs identical.
+Review fixes (after Sourcery review of the first version): a blob shared by tiles at different zooms is slimmed per
+zoom; the zoom check evaluates every style zoom bound in the tile's display range (`slim.MAP_MAX_ZOOM`, currently 12, must
+match the site map's maxZoom); `int_value` is read as signed; `==`, `!=` and `in` are type-strict like MapLibre; fixed-width unknown
+protobuf fields are copied and unknown wire types stop the build (never a truncated tile); `pm.py` reads the remote header
+only on first use; `dl.py` records the ETag and fails if it changes mid-download; gzip uses mtime=0 so rebuilds are byte-identical.
+Tests: `python3 -m unittest discover -s tests -v` (no network).
 Fail-open: boundaries are always kept; any filter operator the evaluator does not
 support keeps the feature (`ana.ev` raises, `slim.keepfeat` catches).
 

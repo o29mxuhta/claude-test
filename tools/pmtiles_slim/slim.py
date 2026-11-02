@@ -1,8 +1,20 @@
 import sys,json,gzip
 from ana import *
 APP_BOUND=['all',['<=','kind_detail',2],['!=','disputed',True],['any',['==','adm0_l','ISR'],['==','adm0_r','ISR']]]
+MAP_MAX_ZOOM=12  # the site map's maxZoom; z10 tiles (the archive's maxzoom) are overzoomed up to this
+def _bounds():
+    b=set()
+    for l in LAY:
+        for k in ('minzoom','maxzoom'):
+            if l.get(k) is not None:b.add(float(l[k]))
+    return b
 def zooms(z):
-    return [z,z+0.5,z+0.99] if z<10 else [10,11,12]
+    # Layer visibility is constant between style zoom bounds (active when minzoom<=d<maxzoom), so the
+    # interval start plus every bound inside the interval covers every display zoom the tile can be drawn at.
+    lo,hi=(float(z),z+1.0) if z<10 else (10.0,float(MAP_MAX_ZOOM))
+    pts={lo}|{b for b in _bounds() if lo<b<hi or (z>=10 and b==hi)}
+    if z>=10:pts.add(hi)
+    return sorted(pts)
 def keepfeat(nm,pr,gt,z):
     if nm=='boundaries':return True
     try:
@@ -38,7 +50,8 @@ def slim_tile(t,z):
                 elif w2==0:
                     _,q=vi(body,q);nb+=body[s2:q]
                 elif w2==5:q+=4;nb+=body[s2:q]
-                else:q+=8;nb+=body[s2:q]
+                elif w2==1:q+=8;nb+=body[s2:q]
+                else:raise ValueError('unsupported wire type %d in layer'%w2)
             stats[nm]=(tot,kept)
             if kept==0 and nm!='earth':continue
             # varint of length
@@ -50,8 +63,10 @@ def slim_tile(t,z):
             out+=raw[st:st+1]+bytes(v)+nb
         elif w==0:
             _,p=vi(raw,p);out+=raw[st:p]
-        else:break
-    return gzip.compress(bytes(out),9),stats
+        elif w==5:p+=4;out+=raw[st:p]
+        elif w==1:p+=8;out+=raw[st:p]
+        else:raise ValueError('unsupported wire type %d in tile'%w)
+    return gzip.compress(bytes(out),9,mtime=0),stats
 if __name__=='__main__':
     z=int(sys.argv[1]);lon,lat=float(sys.argv[2]),float(sys.argv[3]);rx,ry=int(sys.argv[4]),int(sys.argv[5])
     cx,cy=lonlat2tile(lon,lat,z);o=s=0;n=0;agg={}

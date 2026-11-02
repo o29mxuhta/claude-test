@@ -12,6 +12,7 @@ def parse_value(sub):
             x,p=vi(sub,p)
             if f==7:v=bool(x)
             elif f==6:v=(x>>1)^-(x&1)
+            elif f==4:v=x-(1<<64) if x>=(1<<63) else x  # int_value is a two's-complement int64
             else:v=x
         elif w==5:v=struct.unpack('<f',sub[p:p+4])[0];p+=4
         elif w==1:v=struct.unpack('<d',sub[p:p+8])[0];p+=8
@@ -45,6 +46,10 @@ def feat(fb):
             x,p=vi(fb,p)
             if f==3:gt=x
     return tags,gt
+def teq(a,b):
+    # MapLibre-style typed equality: a boolean never equals a number or string
+    if isinstance(a,bool)!=isinstance(b,bool):return False
+    return a==b
 def ev(e,pr):
     if not isinstance(e,list):return e
     op=e[0]
@@ -56,12 +61,12 @@ def ev(e,pr):
     if op=='get':return pr.get(e[1])
     if op=='literal':return e[1]
     k=e[1];kv=pr.get(k) if isinstance(k,str) else ev(k,pr)
-    if op=='==':return kv==ev(e[2],pr)
-    if op=='!=':return kv!=ev(e[2],pr)
+    if op=='==':return teq(kv,ev(e[2],pr))
+    if op=='!=':return not teq(kv,ev(e[2],pr))
     if op=='in':
         lst=e[2:]
         if len(lst)==1 and isinstance(lst[0],list) and lst[0] and lst[0][0]=='literal':lst=lst[0][1]
-        return kv in lst
+        return any(teq(kv,x) for x in lst)
     if op=='<=':return kv is not None and kv<=e[2]
     raise Exception('op '+op)
 def drawn(sl,pr,gt,z):
