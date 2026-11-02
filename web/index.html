@@ -2322,9 +2322,39 @@ var map = new maplibregl.Map({
        map.setCenter(clamped);
      }
    }
-   map.on('move', function () {
+   // While the user drags, stop at the FIRST point where the camera's own path
+   // leaves the allowed area, instead of projecting to the nearest border point.
+   // The nearest point jumps around on the jagged outline: a noisy diagonal drag
+   // into the border shook the camera (45 direction flips in 50 moves) and a
+   // purely horizontal push slid the camera sideways along slanted coast. The
+   // allowed area is unchanged. The stop is still hard, and sticky: moving
+   // along the border while pushing out does not slide. The outline is not
+   // convex, so walk the segment in small steps and refine the first change; a
+   // plain bisection could tunnel across a gap in the coastline.
+   var _lastAnchorCenter = null;
+   function pathStop(from, to) {
+     var N = 48, lo = 0, hi = -1, i, t;
+     for (i = 1; i <= N; i++) {
+       t = i / N;
+       if (clampToAnchor({ lng: from.lng + (to.lng - from.lng) * t, lat: from.lat + (to.lat - from.lat) * t })) { hi = t; break; }
+       lo = t;
+     }
+     if (hi < 0) return [to.lng, to.lat];
+     for (i = 0; i < 14; i++) {
+       t = (lo + hi) / 2;
+       if (clampToAnchor({ lng: from.lng + (to.lng - from.lng) * t, lat: from.lat + (to.lat - from.lat) * t })) hi = t; else lo = t;
+     }
+     return [from.lng + (to.lng - from.lng) * lo, from.lat + (to.lat - from.lat) * lo];
+   }
+   map.on('move', function (e) {
      var clamped = clampToAnchor(map.getCenter());
-     if (clamped) applyAnchorClamp(clamped);
+     if (clamped) {
+       if (e && e.originalEvent && _lastAnchorCenter && !clampToAnchor(_lastAnchorCenter)) {
+         clamped = pathStop(_lastAnchorCenter, map.getCenter());
+       }
+       applyAnchorClamp(clamped);
+     }
+     _lastAnchorCenter = map.getCenter();
    });
    // A center saved in localStorage before the anchors existed (e.g. out in
    // Jordan) self-heals here on load instead of waiting for the first pan.

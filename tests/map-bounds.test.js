@@ -28,7 +28,7 @@ assert(!/\.setMaxBounds\(/.test(html),
 
 // 2. The center clamp must stay the sole pan guard, and the move handler must
 //    actually apply the clamp result with setCenter.
-var moveHandler = html.match(/map\.on\('move', function \(\) \{[\s\S]*?\n   \}\);/);
+var moveHandler = html.match(/map\.on\('move', function \(e?\) \{[\s\S]*?\n   \}\);/);
 assert(moveHandler, 'clampToAnchor move handler must stay registered');
 assert(moveHandler && /var clamped = clampToAnchor\(map\.getCenter\(\)\);/.test(moveHandler[0]),
   'move handler must compute clamped = clampToAnchor(map.getCenter())');
