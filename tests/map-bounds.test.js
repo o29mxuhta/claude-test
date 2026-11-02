@@ -32,8 +32,17 @@ var moveHandler = html.match(/map\.on\('move', function \(\) \{[\s\S]*?\n   \}\)
 assert(moveHandler, 'clampToAnchor move handler must stay registered');
 assert(moveHandler && /var clamped = clampToAnchor\(map\.getCenter\(\)\);/.test(moveHandler[0]),
   'move handler must compute clamped = clampToAnchor(map.getCenter())');
-assert(moveHandler && /map\.setCenter\(clamped\)/.test(moveHandler[0]),
-  'move handler must apply the clamp result with setCenter');
+assert(moveHandler && /applyAnchorClamp\(clamped\)/.test(moveHandler[0]),
+  'move handler must apply the clamp result via applyAnchorClamp');
+// The move handler must NOT call map.setCenter directly: setCenter stops the
+// active drag and release inertia (the edge-jump bug at zoomed-out levels).
+assert(moveHandler && !/map\.setCenter\(/.test(moveHandler[0]),
+  'move handler must not call map.setCenter (cancels the drag gesture)');
+var applyFn = html.match(/function applyAnchorClamp\(clamped\) \{[\s\S]*?\n   \}/);
+assert(applyFn && /tr\.center = new maplibregl\.LngLat\(/.test(applyFn[0]),
+  'applyAnchorClamp must write the centre onto map.transform');
+assert(applyFn && /map\.setCenter\(clamped\)/.test(applyFn[0]),
+  'applyAnchorClamp must keep setCenter as the fallback');
 
 // 3. The clamp must return null when the center is unchanged, otherwise the
 //    setCenter-inside-move handler recurses infinitely. Every early return in

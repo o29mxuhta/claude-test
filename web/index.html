@@ -2307,9 +2307,24 @@ var map = new maplibregl.Map({
      }
      return [_nearest[0], _nearest[1]];
    }
+   // Apply the clamp WITHOUT map.setCenter(): setCenter -> jumpTo -> stop()
+   // cancels the active drag and its release inertia, so at the edge of the
+   // allowed area (most visible fully zoomed out) the map snapped back and the
+   // gesture died. Writing the constrained centre straight onto the transform
+   // keeps the gesture alive: the camera just stays pinned at the edge while
+   // the finger/mouse keeps moving. setCenter stays as the fallback if a
+   // future MapLibre drops the transform setter.
+   function applyAnchorClamp(clamped) {
+     var tr = map.transform;
+     if (tr && 'center' in tr && typeof maplibregl.LngLat === 'function') {
+       tr.center = new maplibregl.LngLat(clamped[0], clamped[1]);
+     } else {
+       map.setCenter(clamped);
+     }
+   }
    map.on('move', function () {
      var clamped = clampToAnchor(map.getCenter());
-     if (clamped) map.setCenter(clamped);
+     if (clamped) applyAnchorClamp(clamped);
    });
    // A center saved in localStorage before the anchors existed (e.g. out in
    // Jordan) self-heals here on load instead of waiting for the first pan.
