@@ -2322,9 +2322,103 @@ var map = new maplibregl.Map({
        map.setCenter(clamped);
      }
    }
-   map.on('move', function () {
+   // Soft edge: stopping dead at the border felt abrupt (real-device video,
+   // 2026-11-02). Pan motion that heads toward the border is damped in a band
+   // of EDGE_BAND_PX pixels in front of it, so a drag or a release glide
+   // eases to a stop instead of hitting a wall. Only the component pointing at
+   // the border is damped, so the camera still slides along it. The hard clamp
+   // below stays as the final guard, so the allowed area itself is unchanged.
+   var EDGE_BAND_PX = 90;
+   // Pure helper (unit-tested). (dx,dy) is the requested pan step, (ux,uy) the
+   // unit vector toward the nearest border point, rem the remaining distance
+   // to the limit and band the damping width, all in degrees. Returns the
+   // step to apply.
+   function edgeDampedStep(dx, dy, ux, uy, rem, band) {
+     var dn = dx * ux + dy * uy;
+     if (!(dn > 0) || !(band > 0)) return [dx, dy];
+     var q = Math.min(1, Math.max(0, rem / band));
+     // Ease-in: the allowed outward share falls with the square of the
+     // remaining distance, and a single step never covers more than 35% of
+     // what is left, so the camera approaches the limit asymptotically and
+     // never reaches it in one frame.
+     var out = Math.min(dn * q * q, Math.max(0, rem) * 0.35);
+     var cut = dn - out;
+     return [dx - cut * ux, dy - cut * uy];
+   }
+   // First crossing of the segment (px,py)->(px+dx*len, py+dy*len) with the
+   // ring. Returns the distance along the segment, or -1 for no crossing, and
+   // writes the unit normal of the crossed ring edge, oriented along the
+   // direction of travel, into out[0]/out[1]. Pure helper (unit-tested).
+   function rayRingHit(px, py, dx, dy, len, ring, out) {
+     var best = -1;
+     var ex = px + dx * len, ey = py + dy * len;
+     for (var i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+       var ax = ring[j][0], ay = ring[j][1];
+       var sx = ring[i][0] - ax, sy = ring[i][1] - ay;
+       var den = (ex - px) * sy - (ey - py) * sx;
+       if (den === 0) continue;
+       var t = ((ax - px) * sy - (ay - py) * sx) / den;
+       var u = ((ax - px) * (ey - py) - (ay - py) * (ex - px)) / den;
+       if (t < 0 || t > 1 || u < 0 || u > 1) continue;
+       if (best < 0 || t * len < best) {
+         best = t * len;
+         var nl = Math.sqrt(sx * sx + sy * sy) || 1;
+         var nx = -sy / nl, ny = sx / nl;
+         if (nx * dx + ny * dy < 0) { nx = -nx; ny = -ny; }
+         out[0] = nx; out[1] = ny;
+       }
+     }
+     return best;
+   }
+   var _lastCenter = null, _lastZoom = null, _edgeN = [0, 0];
+   function softenEdge(e) {
+     var c = map.getCenter(), z = map.getZoom();
+     if (_lastCenter && e && e.originalEvent && anchorRing &&
+         Math.abs(z - _lastZoom) < 1e-9 && !clampToAnchor(_lastCenter)) {
+       var dx = c.lng - _lastCenter.lng, dy = c.lat - _lastCenter.lat;
+       var L = Math.sqrt(dx * dx + dy * dy);
+       if (L > 1e-12) {
+         var band = EDGE_BAND_PX * 360 / (512 * Math.pow(2, z));
+         var ux = dx / L, uy = dy / L, look = Math.max(band, L);
+         var far = new maplibregl.LngLat(_lastCenter.lng + ux * look, _lastCenter.lat + uy * look);
+         if (clampToAnchor(far)) {
+           // Distance to the clamp border along the direction of travel.
+           var lo = 0, hi = look;
+           for (var k = 0; k < 14; k++) {
+             var mid = (lo + hi) / 2;
+             if (clampToAnchor(new maplibregl.LngLat(_lastCenter.lng + ux * mid, _lastCenter.lat + uy * mid))) hi = mid; else lo = mid;
+           }
+           // Outward normal of the border: from where the border pulls the
+           // far point back to the far point. Only the share of the move that
+           // points along this normal is eased, so sliding along the border
+           // keeps its speed.
+           var pr = clampToAnchor(far);
+           var nx = far.lng - pr[0], ny = far.lat - pr[1];
+           var nl = Math.sqrt(nx * nx + ny * ny);
+           if (nl > 1e-12) {
+             nx /= nl; ny /= nl;
+             var cosA = nx * ux + ny * uy;
+             // The projection stretches latitude by 1/cos(lat), so a pixel
+             // band is shorter in degrees along north/south normals.
+             var cl = Math.cos(_lastCenter.lat * Math.PI / 180);
+             var bandN = band / Math.sqrt(nx * nx + (ny / cl) * (ny / cl));
+             var step = edgeDampedStep(dx, dy, nx, ny, lo * (cosA > 0 ? cosA : 0), bandN);
+           } else {
+             var step = [dx, dy];
+           }
+           if (step[0] !== dx || step[1] !== dy) {
+             applyAnchorClamp([_lastCenter.lng + step[0], _lastCenter.lat + step[1]]);
+           }
+         }
+       }
+     }
+   }
+   map.on('move', function (e) {
+     softenEdge(e);
      var clamped = clampToAnchor(map.getCenter());
      if (clamped) applyAnchorClamp(clamped);
+     _lastCenter = map.getCenter();
+     _lastZoom = map.getZoom();
    });
    // A center saved in localStorage before the anchors existed (e.g. out in
    // Jordan) self-heals here on load instead of waiting for the first pan.
