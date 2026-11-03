@@ -24,7 +24,7 @@ async function suite(){
  // 5: 200 empty body -> [] (existing rolling-history behaviour)
  get=load(async u=>new Response('\ufeff\r\n',{status:200}));r=await get('/api/history');assert.equal(r.status,200);assert.equal(await r.text(),'[]');
  // 6: alerts single target, unchanged
- calls=[];get=load(async u=>{calls.push(u);return new Response('\ufeff\r\n',{status:200});});r=await get('/api/alerts');assert.equal(r.status,200);assert.equal(calls.length,1);assert(calls[0].includes('alerts.json'));
+ calls=[];get=load(async u=>{calls.push(u);return new Response('\ufeff\r\n',{status:200});});r=await get('/api/alerts');assert.equal(r.status,200);assert.equal(calls.length,1);assert(calls[0].includes('/warningMessages/alert/Alerts.json'));
  // 7: invalid payload still 502
  get=load(async u=>new Response('{"x":1}',{status:200}));r=await get('/api/history');assert.equal(r.status,502);
  }
