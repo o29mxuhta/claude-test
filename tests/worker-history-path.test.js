@@ -25,7 +25,11 @@ async function suite(){
  get=load(async u=>new Response('\ufeff\r\n',{status:200}));r=await get('/api/history');assert.equal(r.status,200);assert.equal(await r.text(),'[]');
  // 6: alerts single target, unchanged
  calls=[];get=load(async u=>{calls.push(u);return new Response('\ufeff\r\n',{status:200});});r=await get('/api/alerts');assert.equal(r.status,200);assert.equal(calls.length,1);assert(calls[0].includes('/warningMessages/alert/Alerts.json'));
+ // 8: alerts try documented Alerts.json first, fall back only on 404
+ calls=[];get=load(async u=>{calls.push(u);return calls.length<2?new Response('nf',{status:404}):new Response('\ufeff\r\n',{status:200});});r=await get('/api/alerts');assert.equal(r.status,200);assert.equal(calls.length,2);assert(calls[0].includes('/warningMessages/alert/Alerts.json'));assert(calls[1].includes('/WarningMessages/alert/alerts.json'));assert.equal(r.headers.get('X-Upstream-Target'),'1');
+ // 9: Referer is the documented origin root; target header is exposed to browsers
+ let seen;get=load(async(u,o)=>{seen=o;return new Response('\ufeff\r\n',{status:200});});r=await get('/api/alerts');assert.equal(seen.headers.Referer,'https://www.oref.org.il/');assert(r.headers.get('Access-Control-Expose-Headers').includes('X-Upstream-Target'));
  // 7: invalid payload still 502
  get=load(async u=>new Response('{"x":1}',{status:200}));r=await get('/api/history');assert.equal(r.status,502);
  }
-(async()=>{for(const w of WORKERS){SRC=path.join(__dirname,'..','workers',w,'worker.js');await suite();console.log(w+': 7 tests passed');}})().catch(e=>{console.error(e);process.exit(1)});
+(async()=>{for(const w of WORKERS){SRC=path.join(__dirname,'..','workers',w,'worker.js');await suite();console.log(w+': 9 tests passed');}})().catch(e=>{console.error(e);process.exit(1)});
