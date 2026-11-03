@@ -2,12 +2,12 @@ const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
-    "Access-Control-Expose-Headers": "X-Upstream-Status, X-Source-Checked-At, X-Source-Request-Id",
+    "Access-Control-Expose-Headers": "X-Upstream-Status, X-Source-Checked-At, X-Source-Request-Id, X-Upstream-Target",
 };
 
 const orefHeaders = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-    "Referer": "https://www.oref.org.il/12481-he/Pakar.aspx",
+    "Referer": "https://www.oref.org.il/",
     "Accept": "application/json, text/plain, */*",
     "X-Requested-With": "XMLHttpRequest",
     "Connection": "keep-alive"
@@ -39,7 +39,7 @@ async function handleRequest(request) {
         // ==========================================
         if (['/api/alerts','/api2/alerts','/api/history','/api2/history'].includes(pathname)) {
             const targets = pathname.includes('alert')
-                ? ["https://www.oref.org.il/WarningMessages/alert/alerts.json"]
+                ? ["https://www.oref.org.il/warningMessages/alert/Alerts.json", "https://www.oref.org.il/WarningMessages/alert/alerts.json"]
                 : [
                     "https://www.oref.org.il/warningMessages/alert/History/AlertsHistory.json",
                     "https://www.oref.org.il/WarningMessages/History/AlertsHistory.json",
