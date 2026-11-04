@@ -2513,17 +2513,9 @@ map.on('style.load', function() {
     });
     setTimeout(function() { fetchExtendedHistory(function() { rebuildTimelineFn(); }); }, 800);
    
-    // --- Map Interactions ---
-    map.on('click', 'alerts-hit', function(e) {
-        if (menuOpen || drivingModeFeatureEnabled) return;
-        var name = e.features[0].properties.name;
-        if (selectedLocation === name) deselectLocation();
-        else openLocationPanel(name);
-    });
-
-    map.on('mouseenter', 'alerts-hit', function() { if (!menuOpen) map.getCanvas().style.cursor = 'pointer'; });
-    map.on('mouseleave', 'alerts-hit', function() { map.getCanvas().style.cursor = ''; });
-
+    // Map click/cursor interactions are registered once by setupInteractionHandler()
+    // (called during map load). A second registration here made every real tap
+    // toggle the location panel twice (open then immediately closed).
     // --- Persistence ---
     map.on('moveend', function() {
         isZoomingProgrammatically = false;
@@ -6757,19 +6749,10 @@ function init() {
     // Register the visit
     trackVisit();
     fetchAnalytics();
-    // Map Click Listener
-    map.getCanvasContainer().addEventListener('click', function(e) {
-        if (isStyleLoading) return;
-        var rect = map.getCanvas().getBoundingClientRect();
-        var point = [e.clientX - rect.left, e.clientY - rect.top];
-        var features = map.queryRenderedFeatures(point, { layers: ['alerts-hit'] });
-        if (features.length > 0) {
-            var name = features[0].properties.name;
-            if (selectedLocation === name) deselectLocation();
-            else openLocationPanel(name);
-        }
-    }, true);
-
+    // Zone tap-to-select lives in setupInteractionHandler() (MapLibre layer
+    // click, which ignores drags). A raw DOM click listener here fired on every
+    // pointer release over the map, so a drag that ended on an alert polygon
+    // selected it. Removed 2026-11-04.
     menuOpen = false;
     drivingModeFeatureEnabled = false;
     document.body.classList.remove('has-overlay');
