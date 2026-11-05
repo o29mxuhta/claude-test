@@ -1606,6 +1606,12 @@ try {
   //   archive with its own correct offsets.
   // - After that, the original archive's prebuilt instance takes over the selected
   //   URL's protocol entry, so later tile requests read the original archive too.
+  function isPMTilesV3Header(buf) {
+    if (!buf || buf.byteLength < 8) return false;
+    var b = new Uint8Array(buf, 0, 8);
+    return b[0] === 0x50 && b[1] === 0x4D && b[2] === 0x54 && b[3] === 0x69 &&
+      b[4] === 0x6C && b[5] === 0x65 && b[6] === 0x73 && b[7] === 0x03;
+  }
   function FallbackSource(url, fallbackUrl, onFailure) {
     TimeoutSource.call(this, url);
     this.fallback = new TimeoutSource(fallbackUrl);
@@ -1619,21 +1625,43 @@ try {
     var self = this;
     if (this.usingFallback) return this.fallback.getBytes(offset, length, signal, etag);
     return TimeoutSource.prototype.getBytes.call(this, offset, length, signal, etag).then(function(v) {
+      // A corrupt archive can still answer 200: validate the header bytes on the
+      // first read so bad data triggers the fallback instead of a blank map.
+      if (!self.opened && offset === 0 && !isPMTilesV3Header(v.data)) {
+        self.onFailure(new Error('Invalid PMTiles header from ' + self.url), false);
+        self.usingFallback = true;
+        return self.fallback.getBytes(offset, length, signal, etag);
+      }
       self.opened = true;
       return v;
     }, function(e) {
-      self.onFailure(e);
-      if (self.opened) throw e; // offsets already came from the selected archive
+      // Routine request cancellations (pan/zoom aborts) are not archive failures:
+      // propagate them without swapping archives or retrying on a dead signal.
+      if ((signal && signal.aborted) || (e && e.name === 'AbortError')) throw e;
+      self.onFailure(e, self.opened);
+      if (self.opened) throw e; // offsets already index this archive; MapLibre re-requests the tile through the swapped protocol entry
       self.usingFallback = true;
       return self.fallback.getBytes(offset, length, signal, etag);
     });
   };
   var originalPM = new pmtiles.PMTiles(new TimeoutSource(PMTILES_ORIGINAL_URL));
-  var slimPM = new pmtiles.PMTiles(new FallbackSource(PMTILES_HTTP_URL, PMTILES_ORIGINAL_URL, function(e) {
+  var slimPM = new pmtiles.PMTiles(new FallbackSource(PMTILES_HTTP_URL, PMTILES_ORIGINAL_URL, function(e, afterOpen) {
     if (protocol.get(PMTILES_HTTP_URL) === originalPM) return;
     window.__pmStats.fallbacks = (window.__pmStats.fallbacks || 0) + 1;
     console.error('Map archive request failed, falling back to the original archive:', e);
     protocol.tiles.set(PMTILES_HTTP_URL, originalPM);
+    if (afterOpen) {
+      // A tile whose request failed after the header loaded stays errored in
+      // MapLibre's cache and is not re-requested on its own (verified: idle
+      // viewport keeps it missing). Reloading the source once re-requests the
+      // current viewport through the swapped protocol entry.
+      try {
+        var basemap = (typeof map !== 'undefined' && map && map.getSource) ? map.getSource('protomaps') : null;
+        if (basemap && basemap.setUrl) basemap.setUrl(PMTILES_URL);
+      } catch (reloadErr) {
+        console.error('Basemap reload after archive fallback failed:', reloadErr);
+      }
+    }
   }));
   // The pmtiles protocol finds this source by its URL string: PMTILES_URL below must use the same value.
   protocol.add(slimPM);
