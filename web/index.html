@@ -385,6 +385,10 @@ body.dark #timeline-unknown-records { color: #ccc; border-color: #555; }
   left: var(--menu-panel-left, 49px) !important; right: auto !important; bottom: auto !important; z-index: 9998 !important;
   background: rgba(255,255,255,0.97); border: 1px solid #ccc; border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.2); direction: rtl;
   width: 320px; max-width: calc(100vw - var(--menu-panel-left, 49px) - 14px); max-height: calc(100vh - var(--menu-panel-top, 157px) - 20px); overflow-y: auto;
+  /* Never show a horizontal scrollbar: nothing in the panel is meant to be wider than it,
+     and select-replacing browser extensions can push hidden selects past its edge. The
+     mobile rule below already clips the same way. */
+  overflow-x: hidden;
 }
 .menu-item { border-bottom: 1px solid #f0f0f0; }
 .menu-item:last-child { border-bottom: none; }
@@ -1587,10 +1591,12 @@ try {
   };
   var protocol = new pmtiles.Protocol();
   var PMTILES_ORIGINAL_URL = 'https://assets.redmap.dev/middle-east.pmtiles';
-  // Dev trial: slimmed archive (same features the style draws, see tools/pmtiles_slim). Exact host only;
-  // prod, previews and every unknown host keep the original archive. Revert this line to roll back.
-  var PMTILES_HTTP_URL = location.hostname === 'dev.redmap.me'
-    ? 'https://assets.redmap.dev/middle-east.slim-20261102.pmtiles'
+  var PMTILES_SLIM_URL = 'https://assets.redmap.dev/middle-east.slim-20261102.pmtiles';
+  // Slimmed archive (same features the style draws, see tools/pmtiles_slim) on the live and dev
+  // sites; previews and unknown hosts keep the original archive. To roll back, point the live
+  // hosts here at PMTILES_ORIGINAL_URL.
+  var PMTILES_HTTP_URL = ['redmap.me', 'www.redmap.me', 'dev.redmap.me'].indexOf(location.hostname) !== -1
+    ? PMTILES_SLIM_URL
     : PMTILES_ORIGINAL_URL;
   // The pmtiles protocol finds this source by its URL string: PMTILES_URL below must use the same value.
   protocol.add(new pmtiles.PMTiles(new TimeoutSource(PMTILES_HTTP_URL)));
@@ -7202,19 +7208,32 @@ var bounds = featureBounds(feature);
               (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   document.getElementById(isIos ? 'share-icon-ios' : 'share-icon-android').style.display = 'block';
 
-  if (navigator.share && ('ontouchstart' in window)) {
+  var shareData = {
+    title: 'מפת התגוננות',
+    text: 'התרעות פיקוד העורף בזמן אמת',
+    url: 'https://redmap.me'
+  };
+  // Touch devices get the native share sheet. Desktops without navigator.share
+  // (e.g. Chrome on a Mac) fall back to copying the link to the clipboard.
+  if (navigator.share || (navigator.clipboard && navigator.clipboard.writeText)) {
     document.getElementById('menu-share').style.display = '';
     document.getElementById('menu-share').querySelector('.menu-item-row').addEventListener('click', async function() {
       closeMenu();
       popPanelHistory();
+      if (navigator.share) {
+        try {
+          await navigator.share(shareData);
+        } catch (e) {
+          if (e.name !== 'AbortError') console.error('Share failed:', e);
+        }
+        return;
+      }
       try {
-        await navigator.share({
-          title: 'מפת התגוננות',
-          text: 'התרעות פיקוד העורף בזמן אמת',
-          url: 'https://redmap.me'
-        });
+        await navigator.clipboard.writeText(shareData.url);
+        showToast('הקישור הועתק');
       } catch (e) {
-        if (e.name !== 'AbortError') console.error('Share failed:', e);
+        console.error('Copy failed:', e);
+        window.prompt('העתק את הקישור', shareData.url);
       }
     });
   }
