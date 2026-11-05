@@ -88,16 +88,16 @@ r3.slimPM.source.getBytes(0, 10).then(function (v) {
   eq('failed request served from original', v, 'bytes:' + ORIG);
   eq('source delegates to original', r3.slimPM.source.usingFallback, true);
   eq('swap happened too', r3.protocol.get(SLIM), r3.originalPM);
-  return r3.slimPM.source.getBytes(20, 10);
+  return r3.slimPM.source.getBytes(0, 16384);
 }).then(function (v) {
-  eq('later requests use original', v, 'bytes:' + ORIG);
+  eq('later header reads use original', v, 'bytes:' + ORIG);
   // The fallback receives the exact byte ranges of the original requests.
   var ranges = r3.slimPM.source.fallback.ranges || [];
   eq('fallback saw both requests', ranges.length, 2);
   eq('fallback range 1 offset', ranges[0] && ranges[0][0], 0);
   eq('fallback range 1 length', ranges[0] && ranges[0][1], 10);
-  eq('fallback range 2 offset', ranges[1] && ranges[1][0], 20);
-  eq('fallback range 2 length', ranges[1] && ranges[1][1], 10);
+  eq('fallback range 2 offset', ranges[1] && ranges[1][0], 0);
+  eq('fallback range 2 length', ranges[1] && ranges[1][1], 16384);
 }).then(function () {
   // Routine cancellations are not archive failures: an aborted request rejects
   // without swapping archives, counting a fallback, or touching the original.
@@ -247,6 +247,21 @@ r3.slimPM.source.getBytes(0, 10).then(function (v) {
       eq('post-header: reload targets protomaps source', setUrlCalls[0] && setUrlCalls[0][0], 'protomaps');
       eq('post-header: reload keeps same style URL', setUrlCalls[0] && setUrlCalls[0][1], 'pmtiles://' + SLIM);
       eq('post-header: protocol swapped (reload test)', r12.protocol.get(SLIM), r12.originalPM);
+    });
+  });
+}).then(function () {
+  // Once the fallback has begun, a non-header request to the slim source must
+  // never be served from the original archive: its offsets index the slim
+  // archive. (PMTiles cannot issue such a request pre-header; this guards the
+  // invariant for any caller.)
+  var r13 = runBlock('redmap.me');
+  return r13.slimPM.source.getBytes(0, 16384).then(function () {
+    eq('r13 fallback began', r13.slimPM.source.usingFallback, true);
+    return r13.slimPM.source.getBytes(500, 100).then(function () {
+      failed++; console.log('FAIL stale non-header request was served from original');
+    }, function (e) {
+      eq('stale non-header request rejected', /Stale slim-archive/.test(e && e.message), true);
+      eq('stale non-header request not proxied', (r13.slimPM.source.fallback.ranges || []).length, 1);
     });
   });
 }).then(function () {
