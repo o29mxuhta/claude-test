@@ -4,9 +4,11 @@
 
 A static single-page web app showing live Pikud HaOref (Home Front Command) alerts as colored area polygons on a map of Israel. No build step — all JS/CSS is inline in `web/index.html`. Static assets deployed on Cloudflare Pages; API proxy uses a two-tier architecture: Pages Functions handle TLV-routed users directly, non-TLV users are redirected to a placement-pinned Worker.
 
-Note: the displayed visitor count comes from the Pages Function at `/api/analytics`,
-which queries Cloudflare analytics and returns aggregated visit counts for the last
-hour and last 24 hours. The client polls this endpoint once per minute.
+Note: the displayed visitor count comes from the analytics worker chosen by hostname
+(`BACKENDS.analytics` in `web/index.html`, endpoint `/api/analytics`). Production hosts use
+the production proxy worker. The dev hosts (`dev.redmap.me` and the `claude-test-lmz.pages.dev`
+previews) use a separate dev proxy worker with its own counter, so dev visits never change the
+production count. The client polls this endpoint once per minute.
 
 ## Stack
 
