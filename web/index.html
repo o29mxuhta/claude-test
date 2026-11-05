@@ -1631,12 +1631,22 @@ try {
   FallbackSource.prototype.constructor = FallbackSource;
   FallbackSource.prototype.getBytes = function(offset, length, signal, etag) {
     var self = this;
-    if (this.usingFallback) return this.fallback.getBytes(offset, length, signal, etag);
+    // Only header reads can exist before the archive has opened (PMTiles cannot
+    // know tile offsets before the header parses), and only they may come from
+    // the original archive: tile offsets index the slim archive, so serving a
+    // tile range from the original would return corrupt bytes.
+    if (this.usingFallback) {
+      if (offset === 0) return this.fallback.getBytes(offset, length, signal, etag);
+      return Promise.reject(new Error('Stale slim-archive request after fallback'));
+    }
     return TimeoutSource.prototype.getBytes.call(this, offset, length, signal, etag).then(function(v) {
       // A slim response that lands after the fallback already began is stale:
       // serve this request from the original archive so the header PMTiles
       // caches never mixes archives.
-      if (self.usingFallback) return self.fallback.getBytes(offset, length, signal, etag);
+      if (self.usingFallback) {
+        if (offset === 0) return self.fallback.getBytes(offset, length, signal, etag);
+        throw new Error('Stale slim-archive response after fallback');
+      }
       // A corrupt archive can still answer 200: validate the header bytes on the
       // first read so bad data triggers the fallback instead of a blank map.
       if (!self.opened && offset === 0 && !isPMTilesV3Header(v.data)) {
@@ -1653,6 +1663,7 @@ try {
       self.onFailure(e, self.opened);
       if (self.opened) throw e; // offsets already index this archive; MapLibre re-requests the tile through the swapped protocol entry
       self.usingFallback = true;
+      if (offset !== 0) throw e; // unreachable through PMTiles; never serve a slim-derived offset from the original archive
       return self.fallback.getBytes(offset, length, signal, etag);
     });
   };
