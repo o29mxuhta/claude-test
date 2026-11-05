@@ -16,9 +16,17 @@ var ORIG = 'https://assets.redmap.dev/middle-east.pmtiles';
 var passed = 0, failed = 0;
 function eq(name, a, b) { if (a === b) passed++; else { failed++; console.log('FAIL ' + name + ': ' + a + ' != ' + b); } }
 
+// A syntactically valid fixed PMTiles v3 header (127 bytes) inside a 16 KB read.
+function validHeaderBuf() {
+  var b = new Uint8Array(16384);
+  b.set([0x50, 0x4D, 0x54, 0x69, 0x6C, 0x65, 0x73, 0x03]);
+  b[96] = 1; b[97] = 2; b[98] = 2; b[99] = 1; b[100] = 0; b[101] = 10;
+  return b.buffer;
+}
+
 // Stubs mirroring the real pmtiles v3 Protocol/PMTiles and the file's TimeoutSource.
 // getBytes fails only for the slim archive, so fallback behavior is exercisable.
-function runBlock(host) {
+function runBlock(host, mapStub) {
   function TimeoutSource(url) { this.url = url; }
   TimeoutSource.prototype.getKey = function () { return this.url; };
   runBlock.slimImpl = null;
@@ -39,9 +47,9 @@ function runBlock(host) {
   };
   var windowStub = { __pmStats: { attempts: 0, timeouts: 0, retries: 0, failed: 0 } };
   var consoleStub = { error: function () {} };
-  var fn = new Function('location', 'pmtiles', 'TimeoutSource', 'window', 'console',
-    src + '; return { protocol: protocol, slimPM: slimPM, originalPM: originalPM };');
-  var out = fn({ hostname: host }, pmtiles, TimeoutSource, windowStub, consoleStub);
+  var fn = new Function('location', 'pmtiles', 'TimeoutSource', 'window', 'console', 'map',
+    src + '\nvar PMTILES_URL = "pmtiles://" + PMTILES_HTTP_URL;' + '; return { protocol: protocol, slimPM: slimPM, originalPM: originalPM };');
+  var out = fn({ hostname: host }, pmtiles, TimeoutSource, windowStub, consoleStub, mapStub);
   out.win = windowStub;
   return out;
 }
@@ -126,9 +134,7 @@ r3.slimPM.source.getBytes(0, 10).then(function (v) {
   // post-header reads are not re-validated.
   var r6 = runBlock('redmap.me');
   runBlock.slimImpl = function () {
-    var b = new Uint8Array(16);
-    b.set([0x50, 0x4D, 0x54, 0x69, 0x6C, 0x65, 0x73, 0x03]);
-    return Promise.resolve({ data: b.buffer });
+    return Promise.resolve({ data: validHeaderBuf() });
   };
   return r6.slimPM.source.getBytes(0, 16384).then(function (v) {
     eq('valid header opens slim archive', r6.slimPM.source.opened, true);
@@ -145,11 +151,7 @@ r3.slimPM.source.getBytes(0, 10).then(function (v) {
   // bytes), the protocol entry swaps, and later requests use the original.
   var r7 = runBlock('redmap.me');
   runBlock.slimImpl = function (offset) {
-    if (offset === 0) {
-      var b = new Uint8Array(16);
-      b.set([0x50, 0x4D, 0x54, 0x69, 0x6C, 0x65, 0x73, 0x03]);
-      return Promise.resolve({ data: b.buffer });
-    }
+    if (offset === 0) return Promise.resolve({ data: validHeaderBuf() });
     return Promise.reject(new Error('tile gone'));
   };
   return r7.slimPM.source.getBytes(0, 16384).then(function () {
@@ -167,6 +169,85 @@ r3.slimPM.source.getBytes(0, 10).then(function (v) {
     });
   }).then(function (v) {
     eq('post-header: later request served from original', v, 'bytes:' + ORIG);
+  });
+}).then(function () {
+  // A truncated header carrying only the valid signature is still corrupt.
+  var r8 = runBlock('redmap.me');
+  runBlock.slimImpl = function () {
+    return Promise.resolve({ data: new Uint8Array([0x50, 0x4D, 0x54, 0x69, 0x6C, 0x65, 0x73, 0x03]).buffer });
+  };
+  return r8.slimPM.source.getBytes(0, 16384).then(function (v) {
+    eq('truncated header falls back', v, 'bytes:' + ORIG);
+    eq('truncated header not opened', r8.slimPM.source.opened, false);
+    eq('truncated header counted', r8.win.__pmStats.fallbacks, 1);
+  });
+}).then(function () {
+  // A full-size header with a valid signature but impossible fields is corrupt.
+  var r9 = runBlock('redmap.me');
+  runBlock.slimImpl = function () {
+    var b = new Uint8Array(validHeaderBuf());
+    b[101] = 99; // maxZoom out of range
+    return Promise.resolve({ data: b.buffer });
+  };
+  return r9.slimPM.source.getBytes(0, 16384).then(function (v) {
+    eq('garbage fields fall back', v, 'bytes:' + ORIG);
+    eq('garbage fields not opened', r9.slimPM.source.opened, false);
+    eq('garbage fields counted', r9.win.__pmStats.fallbacks, 1);
+  });
+}).then(function () {
+  // A slim response landing after the fallback began is stale: the request is
+  // served from the original archive and the slim archive is never opened.
+  var r10 = runBlock('redmap.me');
+  var calls = 0;
+  runBlock.slimImpl = function () {
+    calls++;
+    if (calls === 1) return new Promise(function (_, rej) { setTimeout(function () { rej(new Error('slim broken')); }, 0); });
+    return new Promise(function (res) { setTimeout(function () { res({ data: validHeaderBuf() }); }, 10); });
+  };
+  var p1 = r10.slimPM.source.getBytes(0, 16384);
+  var p2 = r10.slimPM.source.getBytes(0, 16384);
+  return p1.then(function (v1) {
+    eq('first request served from original', v1, 'bytes:' + ORIG);
+    return p2;
+  }).then(function (v2) {
+    eq('late slim response rerouted to original', v2, 'bytes:' + ORIG);
+    eq('late slim response did not open slim', r10.slimPM.source.opened, false);
+    eq('late slim response: single fallback', r10.win.__pmStats.fallbacks, 1);
+    eq('late slim response: swap happened', r10.protocol.get(SLIM), r10.originalPM);
+  });
+}).then(function () {
+  // An aborted signal prevents fallback even when the rejection is a generic
+  // error rather than an AbortError.
+  var r11 = runBlock('redmap.me');
+  runBlock.slimImpl = function () { return Promise.reject(new Error('network flap')); };
+  var ac2 = new AbortController();
+  ac2.abort();
+  return r11.slimPM.source.getBytes(0, 10, ac2.signal).then(function () {
+    failed++; console.log('FAIL aborted generic-error request did not reject');
+  }, function (e) {
+    eq('aborted signal: generic error propagates', e && e.message, 'network flap');
+    eq('aborted signal: no archive swap', r11.protocol.get(SLIM), r11.slimPM);
+    eq('aborted signal: no fallback count', r11.win.__pmStats.fallbacks, undefined);
+    eq('aborted signal: original untouched', r11.slimPM.source.fallback.ranges, undefined);
+  });
+}).then(function () {
+  // Post-header failure reloads the basemap source once through MapLibre.
+  var setUrlCalls = [];
+  var mapStub = { getSource: function (id) { return { setUrl: function (u) { setUrlCalls.push([id, u]); } }; } };
+  var r12 = runBlock('redmap.me', mapStub);
+  runBlock.slimImpl = function (offset) {
+    if (offset === 0) return Promise.resolve({ data: validHeaderBuf() });
+    return Promise.reject(new Error('tile gone'));
+  };
+  return r12.slimPM.source.getBytes(0, 16384).then(function () {
+    return r12.slimPM.source.getBytes(500, 100).then(function () {
+      failed++; console.log('FAIL post-header failing request did not rethrow (reload test)');
+    }, function () {
+      eq('post-header: basemap reload requested once', setUrlCalls.length, 1);
+      eq('post-header: reload targets protomaps source', setUrlCalls[0] && setUrlCalls[0][0], 'protomaps');
+      eq('post-header: reload keeps same style URL', setUrlCalls[0] && setUrlCalls[0][1], 'pmtiles://' + SLIM);
+      eq('post-header: protocol swapped (reload test)', r12.protocol.get(SLIM), r12.originalPM);
+    });
   });
 }).then(function () {
   console.log(passed + ' passed, ' + failed + ' failed');
