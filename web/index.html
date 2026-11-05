@@ -1607,10 +1607,18 @@ try {
   // - After that, the original archive's prebuilt instance takes over the selected
   //   URL's protocol entry, so later tile requests read the original archive too.
   function isPMTilesV3Header(buf) {
-    if (!buf || buf.byteLength < 8) return false;
-    var b = new Uint8Array(buf, 0, 8);
-    return b[0] === 0x50 && b[1] === 0x4D && b[2] === 0x54 && b[3] === 0x69 &&
-      b[4] === 0x6C && b[5] === 0x65 && b[6] === 0x73 && b[7] === 0x03;
+    // The fixed PMTiles v3 header is 127 bytes; the signature alone is not
+    // enough - a truncated or garbled remainder fails here instead of inside
+    // PMTiles, where the fallback can no longer see the error.
+    if (!buf || buf.byteLength < 127) return false;
+    var b = new Uint8Array(buf, 0, 127);
+    if (!(b[0] === 0x50 && b[1] === 0x4D && b[2] === 0x54 && b[3] === 0x69 &&
+      b[4] === 0x6C && b[5] === 0x65 && b[6] === 0x73 && b[7] === 0x03)) return false;
+    var clustered = b[96], internalComp = b[97], tileComp = b[98], tileType = b[99];
+    var minZoom = b[100], maxZoom = b[101];
+    return clustered <= 1 && internalComp >= 1 && internalComp <= 4 &&
+      tileComp >= 1 && tileComp <= 4 && tileType >= 1 && tileType <= 5 &&
+      minZoom <= 30 && maxZoom <= 30 && minZoom <= maxZoom;
   }
   function FallbackSource(url, fallbackUrl, onFailure) {
     TimeoutSource.call(this, url);
@@ -1625,6 +1633,10 @@ try {
     var self = this;
     if (this.usingFallback) return this.fallback.getBytes(offset, length, signal, etag);
     return TimeoutSource.prototype.getBytes.call(this, offset, length, signal, etag).then(function(v) {
+      // A slim response that lands after the fallback already began is stale:
+      // serve this request from the original archive so the header PMTiles
+      // caches never mixes archives.
+      if (self.usingFallback) return self.fallback.getBytes(offset, length, signal, etag);
       // A corrupt archive can still answer 200: validate the header bytes on the
       // first read so bad data triggers the fallback instead of a blank map.
       if (!self.opened && offset === 0 && !isPMTilesV3Header(v.data)) {
