@@ -1598,8 +1598,45 @@ try {
   var PMTILES_HTTP_URL = ['redmap.me', 'www.redmap.me', 'dev.redmap.me'].indexOf(location.hostname) !== -1
     ? PMTILES_SLIM_URL
     : PMTILES_ORIGINAL_URL;
+  // Archive-failure safety net: if the selected archive cannot be read (missing or
+  // corrupt file, asset-host error, exhausted timeouts), the original archive takes
+  // over - with no retry loop:
+  // - Before the archive header has loaded, the failing request itself is retried
+  //   against the original archive, so the instance ends up reading the original
+  //   archive with its own correct offsets.
+  // - After that, the original archive's prebuilt instance takes over the selected
+  //   URL's protocol entry, so later tile requests read the original archive too.
+  function FallbackSource(url, fallbackUrl, onFailure) {
+    TimeoutSource.call(this, url);
+    this.fallback = new TimeoutSource(fallbackUrl);
+    this.onFailure = onFailure;
+    this.opened = false;
+    this.usingFallback = false;
+  }
+  FallbackSource.prototype = Object.create(TimeoutSource.prototype);
+  FallbackSource.prototype.constructor = FallbackSource;
+  FallbackSource.prototype.getBytes = function(offset, length, signal, etag) {
+    var self = this;
+    if (this.usingFallback) return this.fallback.getBytes(offset, length, signal, etag);
+    return TimeoutSource.prototype.getBytes.call(this, offset, length, signal, etag).then(function(v) {
+      self.opened = true;
+      return v;
+    }, function(e) {
+      self.onFailure(e);
+      if (self.opened) throw e; // offsets already came from the selected archive
+      self.usingFallback = true;
+      return self.fallback.getBytes(offset, length, signal, etag);
+    });
+  };
+  var originalPM = new pmtiles.PMTiles(new TimeoutSource(PMTILES_ORIGINAL_URL));
+  var slimPM = new pmtiles.PMTiles(new FallbackSource(PMTILES_HTTP_URL, PMTILES_ORIGINAL_URL, function(e) {
+    if (protocol.get(PMTILES_HTTP_URL) === originalPM) return;
+    window.__pmStats.fallbacks = (window.__pmStats.fallbacks || 0) + 1;
+    console.error('Map archive request failed, falling back to the original archive:', e);
+    protocol.tiles.set(PMTILES_HTTP_URL, originalPM);
+  }));
   // The pmtiles protocol finds this source by its URL string: PMTILES_URL below must use the same value.
-  protocol.add(new pmtiles.PMTiles(new TimeoutSource(PMTILES_HTTP_URL)));
+  protocol.add(slimPM);
 
   maplibregl.addProtocol("pmtiles", protocol.tile);
   // Backends are chosen by exact hostname. Only the dev site hosts use the dev
@@ -7208,35 +7245,40 @@ var bounds = featureBounds(feature);
               (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   document.getElementById(isIos ? 'share-icon-ios' : 'share-icon-android').style.display = 'block';
 
+  var t9n = window.__i18nT || function(s) { return s; };
   var shareData = {
-    title: 'מפת התגוננות',
-    text: 'התרעות פיקוד העורף בזמן אמת',
+    title: t9n('מפת התגוננות'),
+    text: t9n('התרעות פיקוד העורף בזמן אמת'),
     url: 'https://redmap.me'
   };
-  // Touch devices get the native share sheet. Desktops without navigator.share
-  // (e.g. Chrome on a Mac) fall back to copying the link to the clipboard.
-  if (navigator.share || (navigator.clipboard && navigator.clipboard.writeText)) {
-    document.getElementById('menu-share').style.display = '';
-    document.getElementById('menu-share').querySelector('.menu-item-row').addEventListener('click', async function() {
-      closeMenu();
-      popPanelHistory();
-      if (navigator.share) {
-        try {
-          await navigator.share(shareData);
-        } catch (e) {
-          if (e.name !== 'AbortError') console.error('Share failed:', e);
-        }
+  // The share item is always visible: the native share sheet where supported,
+  // then clipboard copy with a confirmation toast, then a plain link prompt.
+  // A native-share rejection (other than the user cancelling) and a clipboard
+  // failure both fall through to the next option instead of dead-ending.
+  document.getElementById('menu-share').style.display = '';
+  document.getElementById('menu-share').querySelector('.menu-item-row').addEventListener('click', async function() {
+    closeMenu();
+    popPanelHistory();
+    if (navigator.share) {
+      try {
+        await navigator.share(shareData);
         return;
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+        console.error('Share failed:', e);
       }
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
       try {
         await navigator.clipboard.writeText(shareData.url);
-        showToast('הקישור הועתק');
+        showToast(t9n('הקישור הועתק'));
+        return;
       } catch (e) {
         console.error('Copy failed:', e);
-        window.prompt('העתק את הקישור', shareData.url);
       }
-    });
-  }
+    }
+    window.prompt(t9n('העתק את הקישור'), shareData.url);
+  });
 
 // --- Global Helper Functions ---
 
