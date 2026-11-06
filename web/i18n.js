@@ -17,6 +17,9 @@
   document.documentElement.dir = RTL ? 'rtl' : 'ltr';
 
   window.__i18nScan = function () { return []; };
+  // JS-side lookup for strings that never enter the DOM (native share sheet,
+  // window.prompt). Identity for Hebrew; the dictionary lookup replaces it below.
+  window.__i18nT = function (s) { return s; };
   if (LANG === 'he') return; // Hebrew is the source language: nothing to do.
 
   var LANG_IDX = { en: 0, ru: 1 }[LANG];
@@ -92,6 +95,14 @@
  "שתף חברים": [
   "Share with friends",
   "Поделиться с друзьями"
+ ],
+ "הקישור הועתק": [
+  "Link copied",
+  "Ссылка скопирована"
+ ],
+ "העתק את הקישור": [
+  "Copy the link",
+  "Скопировать ссылку"
  ],
  "אודות": [
   "About",
@@ -708,6 +719,8 @@
     }
     return translateCities(t);
   }
+
+  window.__i18nT = translateString;
 
   // Guard against observer feedback loops and double translation.
   var lastNodeOut = new WeakMap();
