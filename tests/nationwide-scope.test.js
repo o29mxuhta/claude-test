@@ -408,5 +408,41 @@ ZONES.forEach(function (z) {
 assert(sandbox.extendedHistory.some(function (h) { return h.nationwide === true && h.state === 'green'; }),
   'nationwide green timeline entry recorded');
 
+section('11. Replay: a titled all-clear preserves unrelated active threats');
+// Sourcery finding: reconstructStateAt treated every green as a full-zone clear.
+// Same zone, mixed threats: rockets active, quake hidden behind them by priority;
+// the earthquake-only return-to-buildings must not erase the rockets.
+resetAll();
+sandbox.extendedHistory.push({ location: 'אילת', title: 'ירי רקטות וטילים - היכנסו למרחב המוגן', alertDate: t0.getTime(), state: 'red' });
+sandbox.extendedHistory.push({ location: 'אילת', title: QUAKE_TITLE, alertDate: t0.getTime() + 60000, state: 'earthquake' });
+sandbox.extendedHistory.push({ location: 'אילת', title: 'רעידת אדמה - הנחיות חזרה למבנים', alertDate: t0.getTime() + 120000, state: 'green' });
+sandbox.reconstructStateAt(t0.getTime() + 180000);
+assert(sandbox.locationStates['אילת'] && sandbox.locationStates['אילת'].state === 'red',
+  'rockets survive the earthquake-only clear in replay, got ' + (sandbox.locationStates['אילת'] || {}).state);
+// A zone under the quake alone does clear green.
+resetAll();
+sandbox.extendedHistory.push({ location: 'חיפה', title: QUAKE_TITLE, alertDate: t0.getTime(), state: 'earthquake' });
+sandbox.extendedHistory.push({ location: 'חיפה', title: 'רעידת אדמה - הנחיות חזרה למבנים', alertDate: t0.getTime() + 60000, state: 'green' });
+sandbox.reconstructStateAt(t0.getTime() + 120000);
+assert(sandbox.locationStates['חיפה'] && sandbox.locationStates['חיפה'].state === 'green',
+  'quake-only zone clears green in replay, got ' + (sandbox.locationStates['חיפה'] || {}).state);
+// Nationwide titled variant: clears the nationwide quake but not local rockets.
+resetAll();
+sandbox.extendedHistory.push({ location: SCOPE, title: QUAKE_TITLE, alertDate: t0.getTime(), state: 'earthquake', nationwide: true });
+sandbox.extendedHistory.push({ location: 'אילת', title: 'ירי רקטות וטילים - היכנסו למרחב המוגן', alertDate: t0.getTime() + 60000, state: 'red' });
+sandbox.extendedHistory.push({ location: SCOPE, title: 'רעידת אדמה - הנחיות חזרה למבנים', alertDate: t0.getTime() + 120000, state: 'green', nationwide: true });
+sandbox.reconstructStateAt(t0.getTime() + 180000);
+assert(sandbox.locationStates['אילת'] && sandbox.locationStates['אילת'].state === 'red',
+  'rockets survive the nationwide earthquake clear, got ' + (sandbox.locationStates['אילת'] || {}).state);
+assert(!sandbox.locationStates['חיפה'],
+  'nationwide quake paint clears, got ' + JSON.stringify(sandbox.locationStates['חיפה'] || null));
+// Untitled nationwide all-clear still wipes everything, rockets included.
+resetAll();
+sandbox.extendedHistory.push({ location: 'אילת', title: 'ירי רקטות וטילים - היכנסו למרחב המוגן', alertDate: t0.getTime(), state: 'red' });
+sandbox.extendedHistory.push({ location: SCOPE, title: 'האירוע הסתיים', alertDate: t0.getTime() + 60000, state: 'green', nationwide: true });
+sandbox.reconstructStateAt(t0.getTime() + 120000);
+assert(sandbox.locationStates['אילת'] && sandbox.locationStates['אילת'].state === 'green',
+  'untitled nationwide all-clear still wipes rockets, got ' + (sandbox.locationStates['אילת'] || {}).state);
+
 console.log('\nnationwide-scope: ' + passed + ' passed, ' + failed + ' failed');
 process.exit(failed ? 1 : 0);
