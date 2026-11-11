@@ -285,5 +285,64 @@ assert(lastStatus && lastStatus.state === 'earthquake', 'single-city earthquake 
 assert(lastStatus.html.indexOf('אזורי התראה') !== -1 && lastStatus.html.indexOf('במקלטים') === -1,
   'single-city earthquake shows zone count without shelter wording, got: ' + lastStatus.html);
 
+
+section('8. Sourcery review regressions');
+// 8a. allPolygonNames must not cache an empty list before polygons load.
+resetAll();
+vm.runInContext('var _savedNameToId = nameToId; nameToId = {}; _allPolygonNames = null;', sandbox);
+assert(sandbox.allPolygonNames().length === 0, 'no polygons before buildPolygons');
+vm.runInContext('nameToId = _savedNameToId; delete _savedNameToId;', sandbox);
+assert(sandbox.allPolygonNames().length === 3,
+  'empty result was not cached - polygons found once loaded, got ' + sandbox.allPolygonNames().length);
+
+// 8b. A nationwide all-clear from the feed is itself recorded on the timeline.
+resetAll();
+sandbox.processHistoryEntry({ alertDate: feedTs(t0), title: QUAKE_TITLE, data: SCOPE, category: 7 });
+sandbox.processHistoryEntry({ alertDate: feedTs(new Date(t0.getTime() + 300000)), title: 'האירוע הסתיים', data: SCOPE, category: 7 });
+assert(sandbox.extendedHistory.length === 2, 'quake + clear both on the timeline, got ' + sandbox.extendedHistory.length);
+assert(sandbox.extendedHistory[1].nationwide === true && sandbox.extendedHistory[1].state === 'green',
+  'the nationwide clear is a nationwide green timeline record');
+ZONES.forEach(function (z) {
+  assert((sandbox.locationHistory[z] || []).some(function (h) { return h.state === 'green'; }),
+    z + ' city history recorded the clear');
+});
+
+// 8c. Replay: a local alert must not survive a later nationwide all-clear.
+resetAll();
+sandbox.extendedHistory.push({ location: 'חיפה', title: 'ירי רקטות', alertDate: t0.getTime(), state: 'red' });
+sandbox.extendedHistory.push({ location: SCOPE, title: 'האירוע הסתיים', alertDate: t0.getTime() + 120000, state: 'green', nationwide: true });
+sandbox.reconstructStateAt(t0.getTime() + 120000 + 120000 + 1000);
+assert(painted['חיפה'] !== 'red', 'local red alert wiped by the nationwide clear, got ' + painted['חיפה']);
+
+// 8d. Replay: a city cleared after a nationwide alert stays cleared.
+resetAll();
+sandbox.extendedHistory.push({ location: SCOPE, title: QUAKE_TITLE, alertDate: t0.getTime(), state: 'earthquake', nationwide: true });
+sandbox.extendedHistory.push({ location: 'חיפה', title: 'האירוע הסתיים', alertDate: t0.getTime() + 60000, state: 'green' });
+sandbox.reconstructStateAt(t0.getTime() + 90000);
+assert(painted['עפולה'] === 'earthquake', 'uncleared zone still painted by the overlay');
+assert(painted['חיפה'] !== 'earthquake', 'city cleared after the nationwide alert is not repainted, got ' + painted['חיפה']);
+
+// 8e. Replay: a later weaker nationwide threat never replaces a stronger one.
+resetAll();
+sandbox.extendedHistory.push({ location: SCOPE, title: QUAKE_TITLE, alertDate: t0.getTime(), state: 'earthquake', nationwide: true });
+sandbox.extendedHistory.push({ location: SCOPE, title: 'התרעה', alertDate: t0.getTime() + 60000, state: 'yellow', nationwide: true });
+sandbox.reconstructStateAt(t0.getTime() + 90000);
+ZONES.forEach(function (z) {
+  assert(painted[z] === 'earthquake', z + ' keeps the stronger nationwide threat, got ' + painted[z]);
+});
+
+// 8f. A helper throwing mid-fan-out must release the alert-cache suspension.
+resetAll();
+vm.runInContext('var _origATE = applyThreatEvent; applyThreatEvent = function () { throw new Error("boom"); };', sandbox);
+var threw = false;
+try {
+  sandbox.processHistoryEntry({ alertDate: feedTs(t0), title: QUAKE_TITLE, data: SCOPE, category: 7 });
+} catch (e) { threw = true; }
+vm.runInContext('applyThreatEvent = _origATE; delete _origATE;', sandbox);
+assert(threw, 'the throwing helper propagated');
+assert(vm.runInContext('alertCacheSuspend', sandbox) === 0,
+  'cache suspension released on throw, got ' + vm.runInContext('alertCacheSuspend', sandbox));
+resetAll();
+
 console.log('\nnationwide-scope: ' + passed + ' passed, ' + failed + ' failed');
 process.exit(failed ? 1 : 0);
