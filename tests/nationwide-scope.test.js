@@ -93,6 +93,8 @@ var liveStatusSrc = extractFunction(html, 'updateLiveStatus');
 var reconcileSrc = extractFunction(html, 'reconcileRestoredAlerts');
 assert(!!reconcileSrc, 'extracted reconcileRestoredAlerts');
 var nwActiveSrc = extractFunction(html, 'nationwideActiveThreats');
+var nwCoverageSrc = extractFunction(html, 'restoredNationwideCoverage');
+assert(!!nwCoverageSrc, 'extracted restoredNationwideCoverage');
 var nwThreatSrc = extractFunction(html, 'nationwideThreatActive');
 var endNwSrc = extractFunction(html, 'endNationwideThreatForNamedClear');
 var liveSrc = extractFunction(html, 'processLiveAlert');
@@ -174,7 +176,7 @@ vm.runInContext([
   resolveLocSrc, unresolvedSrc, expandSrc, nationwideSrc, threatsSrc, setStateSrc,
   resolveSrc, cacheSrc, parseDateSrc, recordSrc, historyEntrySrc, processEntriesSrc,
   reconstructSrc, liveStatusSrc, heatmapSrc, reconcileSrc,
-  nwActiveSrc, nwThreatSrc, endNwSrc, liveSrc
+  'var nationwideEndedThreats = {};', nwCoverageSrc, nwActiveSrc, nwThreatSrc, endNwSrc, liveSrc
 ].join('\n'), sandbox);
 // resolveLocation() consults nameIndex, which cities.json fills in the real
 // app; seed the three test zones with their folded forms as keys.
@@ -203,6 +205,7 @@ function resetAll() {
     'for (var k in locationThreats) delete locationThreats[k];' +
     'for (var k2 in locationThreatParts) delete locationThreatParts[k2];' +
     'for (var k3 in unresolvedLocations) delete unresolvedLocations[k3];' +
+    'for (var k4 in nationwideEndedThreats) delete nationwideEndedThreats[k4];' +
     '_allPolygonNames = null;', sandbox);
   painted = {};
   lastStatus = null;
@@ -626,6 +629,78 @@ assert(sandbox.locationStates['חיפה'] && sandbox.locationStates['חיפה'].
 assert(sandbox.parseAlertDate('2026-11-11 11:25:33') === Date.UTC(2026, 10, 11, 9, 25, 33), 'winter IST parse');
 assert(sandbox.parseAlertDate('2026-07-01 12:00:00') === Date.UTC(2026, 6, 1, 9, 0, 0), 'summer IDT parse');
 assert(sandbox.parseAlertDate('2026-11-11T12:14:38') === Date.UTC(2026, 10, 11, 10, 14, 38), 'T separator parses');
+
+section('14. Sourcery round-2 findings (ended-threat tombstone, parts, stale guards, offsets)');
+
+// 14a. A named TITLED clear ends the nationwide ACTIVE flag: a later local
+// clear of the same threat must NOT re-run the nationwide sweep.
+resetAll();
+sandbox.extendedHistory.push({ location: SCOPE, title: QUAKE_TITLE, alertDate: t0.getTime(), state: 'earthquake', nationwide: true });
+sandbox.extendedHistory.push({ location: 'אילת', title: QUAKOVER, alertDate: t0.getTime() + 1000, state: 'green' });
+assert(sandbox.nationwideActiveThreats(t0.getTime() + 2000).indexOf('earthquake') === -1,
+  'named titled clear ends the nationwide active flag, got ' + sandbox.nationwideActiveThreats(t0.getTime() + 2000));
+
+// 14b. endNationwideThreatForNamedClear leaves a tombstone: a delayed
+// nationwide start issued BEFORE the clear cannot repaint afterwards.
+resetAll();
+sandbox.locationThreats['עפולה'] = { earthquake: t0.getTime() };
+sandbox.locationStates['עפולה'] = { state: 'earthquake', since: t0.getTime() };
+sandbox.endNationwideThreatForNamedClear('earthquake', ['אילת'], t0.getTime() + 60000);
+assert(!sandbox.locationThreats['עפולה'], 'sweep removed the unnamed zone threat');
+var r = sandbox.applyThreatEvent('עפולה', QUAKE_TITLE, 'earthquake', t0.getTime());
+assert(r === null && !sandbox.locationThreats['עפולה'] && !sandbox.locationStates['עפולה'],
+  'delayed pre-clear start rejected, got ' + JSON.stringify({ r: r, t: sandbox.locationThreats['עפולה'] || null }));
+r = sandbox.applyThreatEvent('עפולה', QUAKE_TITLE, 'earthquake', t0.getTime() + 120000);
+assert(r === 'earthquake' && sandbox.locationThreats['עפולה'] && sandbox.locationThreats['עפולה'].earthquake === t0.getTime() + 120000,
+  'a NEWER start after the clear still paints, got ' + JSON.stringify(sandbox.locationThreats['עפולה'] || null));
+
+// 14c. Green-recency pre-guard: a threat issued before a landed all-clear is
+// rejected before it can pollute locationThreats or the cache.
+resetAll();
+sandbox.locationStates['חיפה'] = { state: 'green', since: t0.getTime() + 60000 };
+r = sandbox.applyThreatEvent('חיפה', QUAKE_TITLE, 'earthquake', t0.getTime());
+assert(r === null && !sandbox.locationThreats['חיפה'],
+  'stale threat rejected pre-mutation, got ' + JSON.stringify(sandbox.locationThreats['חיפה'] || null));
+assert(JSON.stringify(sandbox.localStorage.getItem('oref-active-alerts')) === 'null' || sandbox.localStorage.getItem('oref-active-alerts') === '{}',
+  'stale threat never reaches the cache, got ' + sandbox.localStorage.getItem('oref-active-alerts'));
+
+// 14d. Same-state parts: a clear removes only the parts it covers; a part
+// that started after the clear survives with the threat still displayed.
+resetAll();
+sandbox.locationThreats['חיפה'] = { earthquake: t0.getTime() + 120000 };
+sandbox.locationThreatParts['חיפה'] = { earthquake: { 'nationwide-quake': t0.getTime(), 'local-quake': t0.getTime() + 120000 } };
+sandbox.locationStates['חיפה'] = { state: 'earthquake', since: t0.getTime() + 120000 };
+sandbox.endNationwideThreatForNamedClear('earthquake', ['אילת'], t0.getTime() + 60000);
+assert(sandbox.locationThreats['חיפה'] && sandbox.locationThreats['חיפה'].earthquake === t0.getTime() + 120000,
+  'newer same-state part survives the clear, got ' + JSON.stringify(sandbox.locationThreats['חיפה'] || null));
+assert(sandbox.locationThreatParts['חיפה'].earthquake['local-quake'] === t0.getTime() + 120000 &&
+  sandbox.locationThreatParts['חיפה'].earthquake['nationwide-quake'] === undefined,
+  'only the covered part was removed');
+assert(sandbox.locationStates['חיפה'] && sandbox.locationStates['חיפה'].state === 'earthquake',
+  'zone still displays the surviving threat');
+
+// 14e. Explicit timezone suffixes are honored, not re-read as Jerusalem wall time.
+assert(sandbox.parseAlertDate('2026-11-11T12:14:38Z') === Date.UTC(2026, 10, 11, 12, 14, 38), 'Z suffix honored');
+assert(sandbox.parseAlertDate('2026-11-11T12:14:38+03:00') === Date.UTC(2026, 10, 11, 9, 14, 38), '+03:00 offset honored');
+assert(sandbox.parseAlertDate('2026-11-11 12:14:38') === Date.UTC(2026, 10, 11, 10, 14, 38), 'bare wall time still Jerusalem');
+
+// 14f. DST transition: wall times straddling the spring forward (2026-03-27,
+// 02:00 IST -> 03:00 IDT) resolve to instants 60 minutes apart, not 120.
+var before = sandbox.parseAlertDate('2026-03-27 01:30:00');
+var after = sandbox.parseAlertDate('2026-03-27 03:30:00');
+assert(before === Date.UTC(2026, 2, 26, 23, 30, 0), 'pre-transition wall time resolves as IST, got ' + (before && new Date(before).toISOString()));
+assert(after === Date.UTC(2026, 2, 27, 0, 30, 0), 'post-transition wall time resolves as IDT, got ' + (after && new Date(after).toISOString()));
+assert(after - before === 3600000, 'straddling wall times are 60 real minutes apart, got ' + (after - before));
+
+// 14g. Restored-cache nationwide detection: a threat covering ~every polygon
+// counts as a nationwide paint even without a timeline start entry.
+resetAll();
+vm.runInContext('allPolygonNames = function () { var a = []; for (var i = 0; i < 100; i++) a.push("zone-" + i); return a; };', sandbox);
+for (var zi = 0; zi < 95; zi++) sandbox.locationThreats['zone-' + zi] = { earthquake: t0.getTime() };
+assert(sandbox.nationwideThreatActive('earthquake', t0.getTime() + 60000) === true,
+  'restored 95% coverage counts as nationwide-active');
+assert(sandbox.nationwideThreatActive('red', t0.getTime() + 60000) === false,
+  'an absent threat is not nationwide-active');
 
 console.log('\nnationwide-scope: ' + passed + ' passed, ' + failed + ' failed');
 process.exit(failed ? 1 : 0);
