@@ -2659,7 +2659,7 @@ map.on('style.load', function() {
        initialized = true;
         if (shouldAutoZoomToEvents() && !selectedLocation) maybeZoomToEvent();
     });
-    setTimeout(function() { fetchExtendedHistory(function() { rebuildTimelineFn(); }); }, 800);
+    setTimeout(function() { fetchExtendedHistory(function() { reconcileRestoredAlerts(); rebuildTimelineFn(); }); }, 800);
    
     // Map click/cursor interactions are registered once by setupInteractionHandler()
     // (called during map load). A second registration here made every real tap
@@ -4185,6 +4185,36 @@ function loadCachedAlerts() {
             updateLiveStatus();
             console.log("🧠 Restored " + loaded + " active alerts from memory.");
         }
+    } catch(e) {}
+}
+
+// A reload restores cached threats WITHOUT the clears that ended them (the
+// ending event arrived while older code was live, or rolled out of the feed
+// before the reload). Replay every all-clear from today's history through the
+// live threat path so restored threats end exactly as they would have live:
+// a titled clear removes only its own threat, an untitled one wipes the zone,
+// and applyThreatEvent's staleness guards keep newer threats safe. Zones left
+// with no threats go green (or stay clean once the green fade has expired).
+function reconcileRestoredAlerts() {
+    try {
+        if (typeof extendedHistory === 'undefined' || extendedHistory.length === 0) return;
+        var restored = Object.keys(locationThreats);
+        if (restored.length === 0) return;
+        var touched = false;
+        for (var i = 0; i < extendedHistory.length; i++) {
+            var e = extendedHistory[i];
+            if (!e || e.state !== 'green') continue;
+            if (e.nationwide) {
+                for (var n = 0; n < restored.length; n++) {
+                    if (locationThreats[restored[n]]) applyThreatEvent(restored[n], e.title, 'green', e.alertDate);
+                }
+                touched = true;
+            } else if (e.location && locationThreats[e.location]) {
+                applyThreatEvent(e.location, e.title, 'green', e.alertDate);
+                touched = true;
+            }
+        }
+        if (touched) updateLiveStatus();
     } catch(e) {}
 }
 
