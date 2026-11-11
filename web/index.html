@@ -969,7 +969,11 @@ function applyThreatEvent(name, title, state, since) {
       if (Object.keys(threats).length === 0) delete locationThreats[name];
       return null;
     }
-    threats[state] = effSince;
+    // Keep the NEWEST directive time: the rolling history feed can deliver
+    // an older event after a newer one, and the earthquake expiry window and
+    // the cache restore both key off this timestamp - an older event must
+    // not shrink it.
+    threats[state] = threats[state] === undefined ? effSince : Math.max(threats[state], effSince);
     var tid = threatIdIn(title);
     if (tid) {
         var byState = locationThreatParts[name] || (locationThreatParts[name] = {});
@@ -1114,22 +1118,63 @@ function fadeGreenMarkers() {
     var toRemove = [];
     var stateChanged = false;
 
+    // Expire threats individually: locationThreats holds EVERY active threat
+    // at a location, each aging on its own directive time - one threat's
+    // timeout must not erase another threat's paint, and a later unrelated
+    // alert must not extend the quake's hour.
+    for (var threatName in locationThreats) {
+      var threats = locationThreats[threatName];
+      var expired = false;
+      for (var st in threats) {
+        // Gil's rule (2026-11-11): a nationwide earthquake paint auto-releases
+        // one hour after the LATEST quake directive - an active directive
+        // renews the hour, so the paint lapses only once nothing is active.
+        var maxAgeMs = (st === 'purple' || st === 'brown') ? 6 * 3600000 : (st === 'earthquake') ? 3600000 : 30 * 60000;
+        if (now - threats[st] >= maxAgeMs) {
+            // Safety net for a missed all-clear. Clear the threat back to
+            // normal - do NOT paint it green: green means "Oref said the event
+            // is over", and a local timeout is not that. Asserting an all-clear
+            // nobody issued is worse than showing nothing.
+            delete threats[st];
+            if (locationThreatParts[threatName]) delete locationThreatParts[threatName][st];
+            expired = true;
+            stateChanged = true;
+        }
+      }
+      if (expired) {
+        if (Object.keys(threats).length === 0) {
+            delete locationThreats[threatName];
+            toRemove.push(threatName); // nothing left: clean the location fully
+            continue;
+        }
+        // The expired threat is gone but another is still active - show it.
+        var next = topThreats(threatName)[0];
+        delete locationStates[threatName]; // bypass priority guards for the downgrade
+        setLocationState(threatName, next, threats[next]);
+      }
+      // Stale cue: dim a prolonged hazmat/earthquake paint past the default
+      // 30-minute window while it waits for its longer expiry or an official
+      // end - the same cue liveRestyle and the cache restore apply.
+      var disp = locationStates[threatName];
+      if (disp && (disp.state === 'hazmat' || disp.state === 'earthquake') &&
+          threats[disp.state] !== undefined && now - threats[disp.state] > 30 * 60000) {
+        applyFeatureStyle(threatName, disp.state, 0.15, secondThreatOf(threatName, disp.state));
+      }
+    }
+
     for (var name in locationStates) {
       var entry = locationStates[name];
       var elapsed = now - entry.since;
 
       if (entry.state !== 'green') {
-        // Gil's rule (2026-11-11): a nationwide earthquake paint auto-releases
-        // one hour after the LATEST quake directive - an active directive
-        // renews the hour, so the paint lapses only once nothing is active.
-        var maxAgeMs = (entry.state === 'purple' || entry.state === 'brown') ? 6 * 3600000 : (entry.state === 'earthquake') ? 3600000 : 30 * 60000;
-        if (elapsed >= maxAgeMs) {
-            // Safety net for a missed all-clear. Clear the location back to
-            // normal — do NOT paint it green: green means "Oref said the event
-            // is over", and a local timeout is not that. Asserting an all-clear
-            // nobody issued is worse than showing nothing.
-            toRemove.push(name);
-            stateChanged = true;
+        // Orphan safety net: a displayed threat with no locationThreats entry
+        // (a direct setLocationState caller) still expires on its own clock.
+        if (!locationThreats[name] && toRemove.indexOf(name) === -1) {
+            var orphanMaxMs = (entry.state === 'purple' || entry.state === 'brown') ? 6 * 3600000 : (entry.state === 'earthquake') ? 3600000 : 30 * 60000;
+            if (elapsed >= orphanMaxMs) {
+                toRemove.push(name);
+                stateChanged = true;
+            }
         }
         continue;
       }
