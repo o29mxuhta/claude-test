@@ -1119,7 +1119,10 @@ function fadeGreenMarkers() {
       var elapsed = now - entry.since;
 
       if (entry.state !== 'green') {
-        var maxAgeMs = (entry.state === 'purple' || entry.state === 'brown') ? 6 * 3600000 : 30 * 60000;
+        // Gil's rule (2026-11-11): a nationwide earthquake paint auto-releases
+        // one hour after the LATEST quake directive - an active directive
+        // renews the hour, so the paint lapses only once nothing is active.
+        var maxAgeMs = (entry.state === 'purple' || entry.state === 'brown') ? 6 * 3600000 : (entry.state === 'earthquake') ? 3600000 : 30 * 60000;
         if (elapsed >= maxAgeMs) {
             // Safety net for a missed all-clear. Clear the location back to
             // normal — do NOT paint it green: green means "Oref said the event
@@ -4285,11 +4288,16 @@ function loadCachedAlerts() {
             for (var st in threatMap) {
                 var since = threatMap[st];
                 var age = now - since;
-                if (st === 'hazmat' || st === 'earthquake') {
+                if (st === 'hazmat') {
                     // Prolonged events: restore regardless of age; past the
                     // default window they render dimmed (stale cue) until an
                     // official end title removes them.
                     kept[st] = since;
+                } else if (st === 'earthquake') {
+                    // Earthquake paints live for one hour from the latest
+                    // directive (Gil's rule) - an older one stays expired
+                    // across a reload instead of resurrecting.
+                    if (age <= 3600000) kept[st] = since;
                 } else {
                     // SMART EXPIRATION (unchanged): Drones/Terrorists stay for
                     // 6 hours waiting for Hazlash. Rockets clear after 30 mins.
