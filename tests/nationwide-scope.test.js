@@ -383,5 +383,30 @@ sandbox.generateHeatmapData();
 heatFeatures = vm.runInContext('__heat ? __heat.features.length : -1', sandbox);
 assert(heatFeatures === 1, 'a city alert still contributes exactly one point, got ' + heatFeatures);
 
+section('10. Earthquake return-to-buildings clears to green');
+assert(sandbox.classifyTitle('רעידת אדמה - הנחיות חזרה למבנים') === 'green',
+  'return-to-buildings classifies green, got ' + sandbox.classifyTitle('רעידת אדמה - הנחיות חזרה למבנים'));
+assert(sandbox.classifyTitle(QUAKE_TITLE) === 'earthquake',
+  'the quake warning itself still classifies earthquake');
+// Zone-scoped: only the named zone goes green; the rest stay under the quake.
+resetAll();
+sandbox.applyThreatEvent('אילת', QUAKE_TITLE, 'earthquake', t0.getTime());
+sandbox.applyThreatEvent('חיפה', QUAKE_TITLE, 'earthquake', t0.getTime());
+sandbox.applyThreatEvent('אילת', 'רעידת אדמה - הנחיות חזרה למבנים', 'green', t0.getTime() + 60000);
+assert(sandbox.locationStates['אילת'] && sandbox.locationStates['אילת'].state === 'green',
+  'named zone cleared to green, got ' + (sandbox.locationStates['אילת'] || {}).state);
+assert(sandbox.locationStates['חיפה'] && sandbox.locationStates['חיפה'].state === 'earthquake',
+  'unmentioned zone stays under the quake, got ' + (sandbox.locationStates['חיפה'] || {}).state);
+// Nationwide variant: return-to-buildings with the generic scope clears every zone.
+resetAll();
+sandbox.processHistoryEntry({ alertDate: feedTs(t0), title: QUAKE_TITLE, data: SCOPE, category: 7 });
+sandbox.processHistoryEntry({ alertDate: feedTs(new Date()), title: 'רעידת אדמה - הנחיות חזרה למבנים', data: SCOPE, category: 13 });
+ZONES.forEach(function (z) {
+  assert(sandbox.locationStates[z] && sandbox.locationStates[z].state === 'green',
+    z + ' cleared to green by the nationwide return, got ' + (sandbox.locationStates[z] || {}).state);
+});
+assert(sandbox.extendedHistory.some(function (h) { return h.nationwide === true && h.state === 'green'; }),
+  'nationwide green timeline entry recorded');
+
 console.log('\nnationwide-scope: ' + passed + ' passed, ' + failed + ' failed');
 process.exit(failed ? 1 : 0);
