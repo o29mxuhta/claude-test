@@ -780,7 +780,14 @@ var timeToShelterData = {}; // Will be populated dynamically from cities.json
 // ==========================================
 
 // 1. MEMORY CACHE
+// Batch guard for mass updates (nationwide fan-out touches ~1,450 locations
+// at once): suspend the per-call read-parse-write cycle and persist once.
+var alertCacheSuspend = 0;
+var alertCacheDirty = false;
+
 function updateAlertCache(name, state, since) {
+    // typeof guard: test harnesses extract this function alone.
+    if (typeof alertCacheSuspend !== 'undefined' && alertCacheSuspend > 0) { alertCacheDirty = true; return; }
     try {
         var cache = JSON.parse(localStorage.getItem('oref-active-alerts') || '{}');
         // Persist the whole simultaneous-threat set. Direct callers that
@@ -799,6 +806,24 @@ function updateAlertCache(name, state, since) {
     } catch(e) {}
 }
 
+// One persisted write after a suspended batch. Rebuilds from the live threat
+// maps, which every batched caller maintains through applyThreatEvent.
+function flushAlertCache() {
+    if (alertCacheSuspend > 0 || !alertCacheDirty) return;
+    alertCacheDirty = false;
+    try {
+        var cache = {};
+        for (var name in locationThreats) {
+            var threats = locationThreats[name];
+            if (!threats || Object.keys(threats).length === 0) continue;
+            cache[name] = { threats: threats };
+            var parts = locationThreatParts[name];
+            if (parts) cache[name].parts = parts;
+        }
+        localStorage.setItem('oref-active-alerts', JSON.stringify(cache));
+    } catch(e) {}
+}
+
 // NOTE: loadCachedAlerts() is defined once, further down (search "SMART
 // EXPIRATION"). An earlier duplicate declaration lived here and was dead code —
 // function declarations hoist, so the later one always won.
@@ -810,6 +835,13 @@ function setLocationState(name, state, since) {
     var PRIORITY = { red: 5, brown: 3, purple: 2, yellow: 1, green: 0, hazmat: 3, earthquake: 4 };
     var existing = locationStates[name];
 
+    if (existing && existing.state === 'green' && state !== 'green') {
+        // Mirror of the stale-all-clear guard below: the history feed replays
+        // the last hour every 10s, so an older response can arrive after the
+        // all-clear for the same event. A threat that STARTED before the
+        // clear must not revive the alert over it.
+        if (effectiveSince < existing.since) return;
+    }
     if (existing && existing.state !== 'green') {
         if (state === 'green') {
             // An all-clear only clears alerts that PRECEDE it. The history feed
@@ -1032,6 +1064,22 @@ function applyThreatEvent(name, title, state, since) {
           var entry = extendedHistory[i];
           if (entry.state === 'green') continue; 
 
+          if (entry.nationwide) {
+              // A country-wide event heats every zone, not one imaginary point.
+              var nwNames = allPolygonNames();
+              for (var nwi = 0; nwi < nwNames.length; nwi++) {
+                  var nwCenter = _polygonCentroid(nwNames[nwi]);
+                  if (nwCenter) {
+                      heatmapFeatures.push({
+                          type: 'Feature',
+                          geometry: { type: 'Point', coordinates: nwCenter },
+                          properties: { intensity: 1 }
+                      });
+                  }
+              }
+              continue;
+          }
+
           var center = _polygonCentroid(entry.location);
           if (center) {
               heatmapFeatures.push({
@@ -1106,7 +1154,7 @@ function updateLiveStatus() {
       return;
     }
     var dominant = null, bestP = -1, residentTotal = 0, activeZonesCount = 0;
-    var P = { red: 4, brown: 3, purple: 2, yellow: 1 };
+    var P = { red: 5, earthquake: 4, brown: 3, hazmat: 3, purple: 2, yellow: 1 };
 
     for (var name in locationStates) {
       var s = locationStates[name].state;
@@ -1114,14 +1162,20 @@ function updateLiveStatus() {
         activeZonesCount++;
         if ((P[s] || 0) > bestP) { bestP = P[s] || 0; dominant = s; }
       }
-      if ((s === 'red' || s === 'purple' || s === 'brown' || s === 'hazmat' || s === 'earthquake') && locationPopulations) {
+      // "במקלטים" only fits shelter-in-place threats. Hazmat/earthquake carry
+      // different instructions (an earthquake's is to go OUT), and a nationwide
+      // earthquake would otherwise count the whole country as sheltering.
+      if ((s === 'red' || s === 'purple' || s === 'brown') && locationPopulations) {
         var pop = locationPopulations[name];
         if (pop) residentTotal += pop;
       }
     }
 
     if (dominant) {
-      var statusLabel = residentTotal > 0 ? (residentTotal.toLocaleString('he-IL') + ' במקלטים • ' + activeZonesCount + ' אזורי התראה') : (activeZonesCount + ' אזורי התראה');
+      var totalZones = allPolygonNames().length;
+      var statusLabel = (totalZones > 0 && activeZonesCount >= totalZones)
+        ? 'התרעה ארצית'
+        : (residentTotal > 0 ? (residentTotal.toLocaleString('he-IL') + ' במקלטים • ' + activeZonesCount + ' אזורי התראה') : (activeZonesCount + ' אזורי התראה'));
       setStatusHTML(dominant, '<a href="#" id="zoomAlertsLink">' + statusLabel + '</a>');
     } else {
       if (!allFeedsHealthy()) {
@@ -3971,7 +4025,8 @@ function buildPolygons(data, onReady) {
     'החשש הוסר',
     'יכולים לצאת',
     'אינם צריכים לשהות',
-    'סיום שהייה בסמיכות'
+    'סיום שהייה בסמיכות',
+    'הנחיות חזרה למבנים'   // "רעידת אדמה - הנחיות חזרה למבנים": return-to-buildings is an all-clear
   ];
 
   // Threat titles, matched by substring so combined forms classify by threat.
@@ -4446,7 +4501,9 @@ function _removePanelHighlight() {
     var bounds = viewingDayBounds();
     for (var i = 0; i < extendedHistory.length; i++) {
       var e = extendedHistory[i];
-      if (e.location === name && e.alertDate >= bounds.start && e.alertDate <= bounds.end) {
+      // Nationwide events (e.g. an earthquake naming no zones) belong to
+      // every city's event list; their location holds the official scope text.
+      if ((e.location === name || e.nationwide) && e.alertDate >= bounds.start && e.alertDate <= bounds.end) {
         extEntries.push({ title: e.title, alertDate: e.alertDate, state: e.state });
         if (e.alertDate > latestExtTs) latestExtTs = e.alertDate;
       }
@@ -5040,6 +5097,41 @@ function expandAndResolveLocations(rawLocations) {
     return finalLocations;
 }
 
+// --- NATIONWIDE SCOPE ---
+// Pikud HaOref sometimes issues an alert that names no zones at all; the
+// entire location field is a generic scope string. Observed 2026-11-11: the
+// earthquake alert carried "בחלק מהאזורים בארץ" and nothing else. Zone
+// resolution can never match these, and silently dropping them meant a real
+// nationwide alert showed nowhere - not live, not in the timeline, not in the
+// archive view. An alert whose whole data is one of these strings is a
+// NATIONWIDE event: every alert-zone polygon lights up and the event is kept
+// as a single timeline/history record labeled with the official scope text.
+var NATIONWIDE_SCOPES = ['בחלק מהאזורים בארץ'];
+
+// Returns the normalized scope string when the alert's data is exactly one
+// nationwide scope (single value, whole-string match), otherwise null.
+function nationwideScopeOf(rawLocations) {
+    if (!rawLocations || rawLocations.length !== 1) return null;
+    var norm = normalizeName(rawLocations[0]);
+    if (!norm) return null;
+    var folded = foldName(norm);
+    for (var i = 0; i < NATIONWIDE_SCOPES.length; i++) {
+        if (foldName(NATIONWIDE_SCOPES[i]) === folded) return norm;
+    }
+    return null;
+}
+
+// Every paintable polygon name, for nationwide fan-out. Never cached while
+// empty: before buildPolygons() fills nameToId a cached empty list would
+// silently drop every nationwide alert for the whole session.
+var _allPolygonNames = null;
+function allPolygonNames() {
+    if (_allPolygonNames) return _allPolygonNames;
+    var names = Object.keys(nameToId);
+    if (names.length > 0) _allPolygonNames = names;
+    return names;
+}
+
    
 // --- Global State for Live Alerts ---
   var lastLiveAlertPayload = '';
@@ -5089,7 +5181,13 @@ function expandAndResolveLocations(rawLocations) {
   // ("עין חרוד, תל יוסף", "דור, נחשולים"). expandAndResolveLocations() tries the
   // whole string first and only splits when every fragment resolves.
   var rawLocations = Array.isArray(alert.data) ? alert.data : [alert.data];
-  var locations = expandAndResolveLocations(rawLocations);
+  // NATIONWIDE FAN-OUT: the alert named no zones but is an official
+  // country-wide scope (e.g. an earthquake) - light every polygon rather
+  // than dropping the alert entirely. Checked before zone resolution so the
+  // scope string is never logged as an unresolved location.
+  var nationwideFanout = !!nationwideScopeOf(rawLocations);
+  var locations = nationwideFanout ? allPolygonNames() : expandAndResolveLocations(rawLocations);
+  nationwideFanout = nationwideFanout && locations.length > 0;
   
   // 5. TIME SYNC
     var d = new Date();
@@ -5101,6 +5199,8 @@ function expandAndResolveLocations(rawLocations) {
     var processedCount = 0;
 
     // 6. EXECUTION LOOP
+    if (nationwideFanout) alertCacheSuspend++;
+    try {
     for (var i = 0; i < locations.length; i++) {
       // expandAndResolveLocations() already returned canonical polygon keys.
       var loc = locations[i];
@@ -5126,7 +5226,11 @@ function expandAndResolveLocations(rawLocations) {
         processedCount++;
       }
     }
-    
+    } finally {
+    // finally: a helper throwing mid-fan-out must not leave the cache
+    // suspended, or no later alert would ever persist again.
+    if (nationwideFanout) { alertCacheSuspend--; flushAlertCache(); }
+    }
     if (droppedCities.length > 0) console.warn("⚠️ Dropped Cities:", droppedCities);
     if (processedCount > 0) console.log("✅ Processed " + processedCount + " cities.");
     
@@ -5459,18 +5563,69 @@ function processHistoryEntry(entry) {
     // comma -- 21 real polygon names contain one. expandAndResolveLocations()
     // resolves the whole string first and splits only if every fragment matches.
     var rawLocations = Array.isArray(entry.data) ? entry.data : [String(entry.data)];
-    var locations = expandAndResolveLocations(rawLocations);
+    // An official country-wide scope (e.g. an earthquake naming no zones) is
+    // a nationwide event, not an unresolvable location. Checked before zone
+    // resolution so the scope string is never logged as unresolved.
+    var nationwideScope = nationwideScopeOf(rawLocations);
+    var locations = nationwideScope ? [] : expandAndResolveLocations(rawLocations);
     var cleanTitle = rawTitle.replace(/\s+/g, ' ').trim();
     var ts = parseAlertDate(entry.alertDate);
-   
+
     // 🚨 GLOBAL CLEAR SAFETY NET: If Oref sends "All Regions Clear", wipe the board
-    if (state === 'green' && (locations.includes('כלל האזורים') || locations.includes('כלל היישובים'))) {
+    if (state === 'green' && (nationwideScope || locations.includes('כלל האזורים') || locations.includes('כלל היישובים'))) {
+        // A nationwide all-clear is itself a timeline event: without a record
+        // here, replay would keep showing the earlier nationwide alert forever.
+        if (nationwideScope && ts && isViewingToday()) {
+            var nwClearKey = nationwideScope + '|' + (entry.alertDate || '').replace('T', ' ');
+            if (!extendedRids.has(nwClearKey)) {
+                extendedRids.add(nwClearKey);
+                extendedHistory.push({ location: nationwideScope, title: cleanTitle, alertDate: ts, state: 'green', nationwide: true });
+            }
+        }
+        alertCacheSuspend++;
+        try {
         for (var activeCity in locationStates) {
+            recordHistory(activeCity, cleanTitle, entry.alertDate || '', 'green');
             applyThreatEvent(activeCity, cleanTitle, 'green', ts);
+        }
+        } finally {
+        alertCacheSuspend--;
+        flushAlertCache();
         }
         return;
     }
-    
+
+    if (nationwideScope) {
+        // One timeline record for the whole event (never 1,450 per-city rows),
+        // labeled with the official scope text; paint + per-city history still
+        // fan out over every polygon so the map and city panels stay honest.
+        if (ts && isViewingToday()) {
+            var nwKey = nationwideScope + '|' + (entry.alertDate || '').replace('T', ' ');
+            if (!extendedRids.has(nwKey)) {
+                extendedRids.add(nwKey);
+                extendedHistory.push({ location: nationwideScope, title: cleanTitle, alertDate: ts, state: state, nationwide: true });
+            }
+        }
+        var allLocs = allPolygonNames();
+        alertCacheSuspend++;
+        try {
+        for (var n = 0; n < allLocs.length; n++) {
+            var nwLoc = allLocs[n];
+            var nwState = resolveInheritedState(state, nwLoc);
+            recordHistory(nwLoc, cleanTitle, entry.alertDate || '', nwState);
+            if (isLiveMode) {
+                applyThreatEvent(nwLoc, cleanTitle, nwState, ts);
+            } else if (liveLocationStates) {
+                updateShadowState(nwLoc, nwState, ts);
+            }
+        }
+        } finally {
+        alertCacheSuspend--;
+        flushAlertCache();
+        }
+        return;
+    }
+
     for (var i = 0; i < locations.length; i++) {
       // Already canonical polygon keys from expandAndResolveLocations().
       var loc = locations[i];
@@ -5608,7 +5763,10 @@ function processEntries(entries) {
         // 🚨 THE SPLITTER & UNROLLER
         // Single raw string; the expander decides whether it is one place or many.
         var rawLocations = Array.isArray(e.data) ? e.data : [String(e.data)];
-        var locations = expandAndResolveLocations(rawLocations);
+        // A nationwide scope (e.g. an earthquake naming no zones) is kept, not
+        // resolved - and never logged as an unresolved location.
+        var nwScope = nationwideScopeOf(rawLocations);
+        var locations = nwScope ? [] : expandAndResolveLocations(rawLocations);
 
         // Historical fallback (history replay only): a 2023-era zone name no current
         // polygon knows. Resolve via the explicit alias/container tables only -
@@ -5617,6 +5775,19 @@ function processEntries(entries) {
           var fkey = foldName(rawLocations[0]);
           var aliasTarget = HISTORICAL_ALIASES[fkey] || HISTORICAL_CONTAINERS[fkey];
           if (aliasTarget) locations = [aliasTarget];
+        }
+
+        // Nationwide scope (e.g. an earthquake naming no zones): keep ONE
+        // timeline record labeled with the official scope text instead of
+        // dropping the event. Replay paints the whole country from it.
+        if (!missingType && nwScope) {
+          var nwKey = nwScope + '|' + (e.alertDate || '').replace('T', ' ');
+          if (!extendedRids.has(nwKey)) {
+            extendedRids.add(nwKey);
+            extendedHistory.push({ location: nwScope, title: title, alertDate: ts, state: state, nationwide: true });
+            added++;
+          }
+          continue;
         }
 
         // Missing-type records still retain the source place when it cannot
@@ -5711,10 +5882,38 @@ function processEntries(entries) {
     // so terrorist-infiltration alerts were silently discarded during replay
     // whenever any other state was already active at that location.
     var PRIORITY = { red: 5, brown: 3, purple: 2, yellow: 1, green: 0, hazmat: 3, earthquake: 4 };
+    var nwActive = {}; // {state: since} - every nationwide threat active at the replay point
     for (var i = 0; i < extendedHistory.length; i++) {
       var e = extendedHistory[i];
       if (e.alertDate > targetTime) break;
       if (e.state === 'unknown') continue; // Presence only, not a threat or an all-clear.
+      if (e.nationwide) {
+        // Country-wide events paint every polygon in the overlay pass below;
+        // here we only track which threats are active at the replay point.
+        if (e.state === 'green') {
+          // A country-wide all-clear wipes every threat, exactly like the
+          // live wipe - earlier local alerts must not survive it. Keeping
+          // them as fresh greens preserves the fade-out rendering.
+          // A TITLED all-clear ("<threat> - האירוע הסתיים", return-to-buildings)
+          // ends only the named threat, mirroring applyThreatEvent: unrelated
+          // active threats survive the clear.
+          var nwEndThreat = explicitThreatIn(e.title);
+          if (nwEndThreat) {
+            if (nwActive[nwEndThreat] !== undefined && nwActive[nwEndThreat] <= e.alertDate) delete nwActive[nwEndThreat];
+            for (var clearedT in accumulated) {
+              if (accumulated[clearedT].state === nwEndThreat && accumulated[clearedT].since <= e.alertDate) {
+                accumulated[clearedT] = { state: 'green', since: e.alertDate };
+              }
+            }
+          } else {
+            for (var cleared in accumulated) accumulated[cleared] = { state: 'green', since: e.alertDate };
+            nwActive = {};
+          }
+        } else {
+          nwActive[e.state === 'inherit' ? 'red' : e.state] = e.alertDate;
+        }
+        continue;
+      }
       var existing = accumulated[e.location];
       // A generic shelter command inherits the threat already active at replay
       // position, defaulting to red.
@@ -5726,7 +5925,12 @@ function processEntries(entries) {
       }
       if (existing) {
         if (eState === 'green') {
-          accumulated[e.location] = { state: 'green', since: e.alertDate };
+          // A TITLED all-clear ends only the named threat (mirrors
+          // applyThreatEvent): an unrelated active threat survives it.
+          var endThreat = explicitThreatIn(e.title);
+          if (!endThreat || (existing.state === endThreat && existing.since <= e.alertDate)) {
+            accumulated[e.location] = { state: 'green', since: e.alertDate };
+          }
           } else if (eState === existing.state || (PRIORITY[eState] || 0) > (PRIORITY[existing.state] || 0)) {
           accumulated[e.location] = { state: eState, since: e.alertDate };
         }
@@ -5750,6 +5954,31 @@ function processEntries(entries) {
         applyFeatureStyle(loc, s, 0.3);
       }
       locationStates[loc] = { state: s, since: sinceTime };
+    }
+
+    // Nationwide overlay: paint every polygon with the strongest nationwide
+    // threat still active at the replay point, except where the per-location
+    // pass already set an equal-or-higher-priority active state or a clear
+    // that is newer than the nationwide alert.
+    var nwBest = null;
+    for (var nwState2 in nwActive) {
+      var nwSince = nwActive[nwState2];
+      if (targetTime - nwSince >= ALERT_MAX_AGE_MS) continue;
+      if (!nwBest || (PRIORITY[nwState2] || 0) > (PRIORITY[nwBest.state] || 0)) nwBest = { state: nwState2, since: nwSince };
+    }
+    if (nwBest) {
+      var nwAll = allPolygonNames();
+      for (var nwi = 0; nwi < nwAll.length; nwi++) {
+        var nwName = nwAll[nwi];
+        var nwExisting = accumulated[nwName];
+        if (nwExisting) {
+          if (nwExisting.state === 'green') {
+            if (nwExisting.since >= nwBest.since) continue; // cleared after the nationwide alert began
+          } else if ((PRIORITY[nwExisting.state] || 0) >= (PRIORITY[nwBest.state] || 0)) continue;
+        }
+        applyFeatureStyle(nwName, nwBest.state, 0.3);
+        locationStates[nwName] = { state: nwBest.state, since: nwBest.since };
+      }
     }
     // Re-apply highlight for selected location.
     // Don't call _removePanelHighlight here — reconstructStateAt already reset all
@@ -6423,7 +6652,7 @@ function processEntries(entries) {
     });
 
     // --- Timeline bands (show duration of active alerts) ---
-    var STATE_PRIORITY = { red: 4, brown: 3, purple: 2, yellow: 1, green: 0 };
+    var STATE_PRIORITY = { red: 5, earthquake: 4, brown: 3, hazmat: 3, purple: 2, yellow: 1, green: 0 };
     var computedBands = []; // [{start, end, state}] - visual tick bands
     var eventPeaks = []; // [timestamp] — last non-green before each all-clear wave
     var eventPeakSizes = []; // [number] — unique location count for each peak
