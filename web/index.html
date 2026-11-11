@@ -2659,7 +2659,7 @@ map.on('style.load', function() {
        initialized = true;
         if (shouldAutoZoomToEvents() && !selectedLocation) maybeZoomToEvent();
     });
-    setTimeout(function() { fetchExtendedHistory(function() { reconcileRestoredAlerts(); rebuildTimelineFn(); }); }, 800);
+    setTimeout(function() { fetchExtendedHistory(function() { rebuildTimelineFn(); }); }, 800);
    
     // Map click/cursor interactions are registered once by setupInteractionHandler()
     // (called during map load). A second registration here made every real tap
@@ -4091,6 +4091,65 @@ function buildPolygons(data, onReady) {
     return null;
   }
 
+  // --- Named-zones all-clear vs a nationwide paint (Gil's rule, 2026-11-11) ---
+  // A nationwide event (e.g. an earthquake naming no zones) paints every
+  // polygon. When a LATER TITLED all-clear names zones while that paint is
+  // still active, the paint ends everywhere: zones the clear does not name
+  // return to clean (NO green release), and only the named zones run the
+  // normal green release. A titled clear ends only its own threat.
+  function nationwideActiveThreats(ts) {
+    var actives = {};
+    if (typeof extendedHistory === 'undefined') return [];
+    for (var i = 0; i < extendedHistory.length; i++) {
+      try {
+        var e = extendedHistory[i];
+        if (!e || !e.nationwide || !e.alertDate || (ts && e.alertDate > ts)) continue;
+        if (e.state === 'green') {
+          var et = explicitThreatIn(typeof e.title === 'string' ? e.title : '');
+          if (et) delete actives[et]; else for (var k in actives) delete actives[k];
+        } else if (e.state && e.state !== 'unknown') {
+          actives[e.state] = true;
+        }
+      } catch (err) {}
+    }
+    return Object.keys(actives);
+  }
+
+  function nationwideThreatActive(threat, ts) {
+    return threat ? nationwideActiveThreats(ts).indexOf(threat) !== -1 : false;
+  }
+
+  function endNationwideThreatForNamedClear(threat, namedLocations, ts) {
+    if (!threat) return;
+    var keep = {};
+    if (Array.isArray(namedLocations)) {
+      for (var i = 0; i < namedLocations.length; i++) keep[namedLocations[i]] = true;
+    }
+    var touched = false;
+    for (var zone in locationThreats) {
+      if (keep[zone]) continue;
+      var threats = locationThreats[zone];
+      // Staleness: only a paint that STARTED at or before the clear ends
+      // here - a threat that began after the clear was issued survives it.
+      if (!threats || threats[threat] === undefined || (ts && threats[threat] > ts)) continue;
+      delete threats[threat];
+      if (typeof locationThreatParts !== 'undefined' && locationThreatParts[zone]) delete locationThreatParts[zone][threat];
+      var remaining = topThreats(zone);
+      delete locationStates[zone]; // bypass the priority guards for the repaint
+      if (remaining.length === 0) {
+        delete locationThreats[zone];
+        // Unnamed zones end CLEAN - the green release belongs to the named
+        // zones alone.
+        resetFeatureStyle(zone);
+        if (typeof updateAlertCache === 'function') updateAlertCache(zone, 'green', ts);
+      } else {
+        setLocationState(zone, remaining[0], threats[remaining[0]]);
+      }
+      touched = true;
+    }
+    if (touched && typeof updateLiveStatus === 'function') updateLiveStatus();
+  }
+
   function classifyTitle(title) {
     var originalTitle = title || "";
     title = originalTitle.replace(/\s+/g, ' ').trim();
@@ -4195,27 +4254,125 @@ function loadCachedAlerts() {
 // a titled clear removes only its own threat, an untitled one wipes the zone,
 // and applyThreatEvent's staleness guards keep newer threats safe. Zones left
 // with no threats go green (or stay clean once the green fade has expired).
-function reconcileRestoredAlerts() {
+function reconcileRestoredAlerts(extraGreens) {
     try {
-        if (typeof extendedHistory === 'undefined' || extendedHistory.length === 0) return;
+        if (typeof extendedHistory === 'undefined') return;
         var restored = Object.keys(locationThreats);
         if (restored.length === 0) return;
-        var touched = false;
+        // Every green event that could end a restored threat: today's
+        // timeline plus, when provided, clears fetched from a previous day
+        // (a prolonged threat can outlive the day it started on).
+        var greens = [];
         for (var i = 0; i < extendedHistory.length; i++) {
-            var e = extendedHistory[i];
-            if (!e || e.state !== 'green') continue;
-            if (e.nationwide) {
-                for (var n = 0; n < restored.length; n++) {
-                    if (locationThreats[restored[n]]) applyThreatEvent(restored[n], e.title, 'green', e.alertDate);
+            var g = extendedHistory[i];
+            if (g && g.state === 'green') greens.push(g);
+        }
+        if (Array.isArray(extraGreens)) greens = greens.concat(extraGreens);
+        greens.sort(function(a, b) { return a.alertDate - b.alertDate; });
+        if (greens.length === 0) return;
+        var touched = false;
+
+        // Gil's rule: a multi-zone TITLED all-clear lands as one entry per
+        // named zone sharing a title + timestamp. When such a clear arrives
+        // while a NATIONWIDE paint of the same threat is active, the paint
+        // ends everywhere - the unnamed zones go clean (no green); the named
+        // zones then release green through the per-zone pass below.
+        var groups = {};
+        for (var j = 0; j < greens.length; j++) {
+            try {
+                var ge = greens[j];
+                if (!ge || ge.nationwide || !ge.location) continue;
+                var gt = explicitThreatIn(typeof ge.title === 'string' ? ge.title : '');
+                if (!gt) continue;
+                var gkey = (ge.title || '') + '|' + ge.alertDate;
+                (groups[gkey] || (groups[gkey] = { threat: gt, ts: ge.alertDate, zones: {} })).zones[ge.location] = true;
+            } catch (err) {}
+        }
+        for (var gk in groups) {
+            var grp = groups[gk];
+            if (!nationwideThreatActive(grp.threat, grp.ts)) continue;
+            try {
+                endNationwideThreatForNamedClear(grp.threat, Object.keys(grp.zones), grp.ts);
+                touched = true;
+            } catch (err) {}
+        }
+
+        for (var k = 0; k < greens.length; k++) {
+            var e = greens[k];
+            // One malformed event must not skip the clears that follow it.
+            try {
+                if (e.nationwide) {
+                    for (var n = 0; n < restored.length; n++) {
+                        if (locationThreats[restored[n]]) applyThreatEvent(restored[n], e.title, 'green', e.alertDate);
+                    }
+                    touched = true;
+                } else if (e.location && locationThreats[e.location]) {
+                    applyThreatEvent(e.location, e.title, 'green', e.alertDate);
+                    touched = true;
                 }
-                touched = true;
-            } else if (e.location && locationThreats[e.location]) {
-                applyThreatEvent(e.location, e.title, 'green', e.alertDate);
-                touched = true;
+            } catch (err) {}
+        }
+        // An all-clear whose green fade has already expired must not flash
+        // green on reload - the zone simply ends clean.
+        var fadeMs = typeof GREEN_FADE_MS !== 'undefined' ? GREEN_FADE_MS : 120000;
+        var nowMs = Date.now();
+        for (var m = 0; m < restored.length; m++) {
+            var zn = restored[m];
+            var st = locationStates[zn];
+            if (st && st.state === 'green' && nowMs - st.since >= fadeMs) {
+                delete locationStates[zn];
+                resetFeatureStyle(zn);
+                if (typeof updateAlertCache === 'function') updateAlertCache(zn, 'green', st.since);
             }
         }
-        if (touched) updateLiveStatus();
+        if (touched && typeof updateLiveStatus === 'function') updateLiveStatus();
     } catch(e) {}
+}
+
+// A prolonged threat restored from cache may have been cleared on a PREVIOUS
+// day - today's timeline never replays that clear, so fetch yesterday's
+// archive and reconcile against its all-clears too.
+function reconcileAgainstYesterdayIfNeeded() {
+    try {
+        var startOfToday = parseAlertDate(todayDateStr() + ' 00:00:00');
+        if (!startOfToday) return;
+        var stale = false;
+        for (var zone in locationThreats) {
+            var threats = locationThreats[zone];
+            for (var t in threats) { if (threats[t] < startOfToday) { stale = true; break; } }
+            if (stale) break;
+        }
+        if (!stale) return;
+        var yParts = new Intl.DateTimeFormat('en-US', {
+            timeZone: 'Asia/Jerusalem', year: 'numeric', month: '2-digit', day: '2-digit'
+        }).formatToParts(new Date(startOfToday - 1));
+        var yv = {};
+        for (var i = 0; i < yParts.length; i++) yv[yParts[i].type] = yParts[i].value;
+        var yStr = yv.year + '-' + yv.month + '-' + yv.day;
+        fetch(HISTORY_BASE + '/api/day-history?date=' + encodeURIComponent(yStr))
+            .then(function(res) { return res.ok ? res.json() : null; })
+            .then(function(data) {
+                if (!Array.isArray(data)) return;
+                var greens = [];
+                for (var i = 0; i < data.length; i++) {
+                    var e = data[i];
+                    if (!e || !e.data) continue;
+                    var title = (typeof e.category_desc === 'string' ? e.category_desc : '').replace(/\s+/g, ' ').trim();
+                    if (!title || classifyTitle(title) !== 'green') continue;
+                    var ts = parseAlertDate(e.alertDate);
+                    if (!ts) continue;
+                    var rawLocations = Array.isArray(e.data) ? e.data : [String(e.data)];
+                    var nwScope = nationwideScopeOf(rawLocations);
+                    if (nwScope) { greens.push({ title: title, alertDate: ts, state: 'green', nationwide: true }); continue; }
+                    var locations = expandAndResolveLocations(rawLocations);
+                    for (var j = 0; j < locations.length; j++) {
+                        greens.push({ location: locations[j], title: title, alertDate: ts, state: 'green' });
+                    }
+                }
+                reconcileRestoredAlerts(greens);
+            })
+            .catch(function() {});
+    } catch (e) {}
 }
 
   // --- Marker management (feature-state) ---
@@ -5229,6 +5386,20 @@ function allPolygonNames() {
     var processedCount = 0;
 
     // 6. EXECUTION LOOP
+    // The payload carries the event's issue time - use it, not receipt time,
+    // so staleness guards compare event times (a clear that raced the feed
+    // must not end a threat that started after it).
+    var eventTs = parseAlertDate(alert.alertDate || '') || null;
+    // Gil's rule: a named-zones TITLED all-clear that lands while a
+    // NATIONWIDE paint of the same threat is active ends that paint
+    // everywhere - unnamed zones return to clean (no green); the named zones
+    // run the normal green release in the loop below.
+    if (state === 'green' && !nationwideFanout && locations.length > 0) {
+      var namedClearThreat = explicitThreatIn(cleanTitle);
+      if (namedClearThreat && nationwideThreatActive(namedClearThreat, eventTs || Date.now())) {
+        endNationwideThreatForNamedClear(namedClearThreat, locations, eventTs || Date.now());
+      }
+    }
     if (nationwideFanout) alertCacheSuspend++;
     try {
     for (var i = 0; i < locations.length; i++) {
@@ -5249,7 +5420,7 @@ function allPolygonNames() {
 
       // 🚨 THE STICKY HANDOFF: Passes the alert to our new memory function
       if (isLiveMode) {
-        applyThreatEvent(loc, cleanTitle, locState);
+        applyThreatEvent(loc, cleanTitle, locState, eventTs || undefined);
         processedCount++;
       } else if (liveLocationStates) {
         updateShadowState(loc, locState);
@@ -5656,6 +5827,17 @@ function processHistoryEntry(entry) {
         return;
     }
 
+    // Gil's rule: a named-zones TITLED all-clear that lands while a
+    // NATIONWIDE paint of the same threat is active ends that paint
+    // everywhere - the unnamed zones return to clean (no green); the named
+    // zones run the normal green release in the loop below.
+    if (state === 'green' && locations.length > 0) {
+      var namedClearThreat = explicitThreatIn(cleanTitle);
+      if (namedClearThreat && nationwideThreatActive(namedClearThreat, ts)) {
+        endNationwideThreatForNamedClear(namedClearThreat, locations, ts);
+      }
+    }
+
     for (var i = 0; i < locations.length; i++) {
       // Already canonical polygon keys from expandAndResolveLocations().
       var loc = locations[i];
@@ -5739,10 +5921,27 @@ function fetchHistory(onDone) {
   }
    
   function parseAlertDate(dateStr) {
-    // Format: "2026-03-03 12:34:56"
+    // Format: "2026-03-03 12:34:56". Pikud HaOref timestamps are
+    // Asia/Jerusalem wall time - parse them in that zone regardless of the
+    // browser's locale, or staleness guards mis-compare against Date.now()
+    // for anyone abroad (and DST transitions shift historical replays).
     if (!dateStr) return null;
-    var d = new Date(dateStr.replace(' ', 'T'));
-    return isNaN(d.getTime()) ? null : d.getTime();
+    var m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/.exec(dateStr);
+    if (!m) {
+      var d = new Date(dateStr.replace(' ', 'T'));
+      return isNaN(d.getTime()) ? null : d.getTime();
+    }
+    // Estimate the instant as if the wall time were UTC, then correct by
+    // Jerusalem's real offset at that moment (handles IST/IDT transitions).
+    var approx = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0));
+    var parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Jerusalem', year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+    }).formatToParts(new Date(approx));
+    var v = {};
+    for (var i = 0; i < parts.length; i++) v[parts[i].type] = parts[i].value;
+    var asUTC = Date.UTC(+v.year, +v.month - 1, +v.day, (+v.hour) % 24, +v.minute, +v.second);
+    return approx - (asUTC - approx);
   }
 
   // --- Extended history (timeline) ---
@@ -5856,6 +6055,13 @@ function processEntries(entries) {
       timelineMax = bounds.end;
       console.log('Day history (' + dateParam + '):', extendedHistory.length, 'entries');
       dayHistoryReady = true;
+      // Re-reconcile restored (cached) threats against every fresh today
+      // load - a clear can arrive after the startup pass, and a prolonged
+      // threat may have been cleared on a previous day.
+      if (dateParam === todayDateStr()) {
+        reconcileRestoredAlerts();
+        reconcileAgainstYesterdayIfNeeded();
+      }
       if (onDone) onDone();
     }
 
@@ -5952,6 +6158,15 @@ function processEntries(entries) {
         eState = (existing && (existing.state === 'red' || existing.state === 'purple' || existing.state === 'brown' || existing.state === 'hazmat' || existing.state === 'earthquake'))
           ? existing.state
           : 'red';
+      }
+      // Gil's rule: a named-zones TITLED clear ends an active NATIONWIDE
+      // paint of the same threat everywhere - the unnamed zones go clean,
+      // the named zones get their green release in the pass below.
+      if (eState === 'green') {
+        var namedClearThreat = explicitThreatIn(e.title);
+        if (namedClearThreat && nwActive[namedClearThreat] !== undefined && nwActive[namedClearThreat] <= e.alertDate) {
+          delete nwActive[namedClearThreat];
+        }
       }
       if (existing) {
         if (eState === 'green') {
