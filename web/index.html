@@ -5097,11 +5097,15 @@ function nationwideScopeOf(rawLocations) {
     return null;
 }
 
-// Every paintable polygon name, cached for nationwide fan-out.
+// Every paintable polygon name, for nationwide fan-out. Never cached while
+// empty: before buildPolygons() fills nameToId a cached empty list would
+// silently drop every nationwide alert for the whole session.
 var _allPolygonNames = null;
 function allPolygonNames() {
-    if (!_allPolygonNames) _allPolygonNames = Object.keys(nameToId);
-    return _allPolygonNames;
+    if (_allPolygonNames) return _allPolygonNames;
+    var names = Object.keys(nameToId);
+    if (names.length > 0) _allPolygonNames = names;
+    return names;
 }
 
    
@@ -5172,6 +5176,7 @@ function allPolygonNames() {
 
     // 6. EXECUTION LOOP
     if (nationwideFanout) alertCacheSuspend++;
+    try {
     for (var i = 0; i < locations.length; i++) {
       // expandAndResolveLocations() already returned canonical polygon keys.
       var loc = locations[i];
@@ -5197,8 +5202,11 @@ function allPolygonNames() {
         processedCount++;
       }
     }
-    
+    } finally {
+    // finally: a helper throwing mid-fan-out must not leave the cache
+    // suspended, or no later alert would ever persist again.
     if (nationwideFanout) { alertCacheSuspend--; flushAlertCache(); }
+    }
     if (droppedCities.length > 0) console.warn("⚠️ Dropped Cities:", droppedCities);
     if (processedCount > 0) console.log("✅ Processed " + processedCount + " cities.");
     
@@ -5541,12 +5549,25 @@ function processHistoryEntry(entry) {
 
     // 🚨 GLOBAL CLEAR SAFETY NET: If Oref sends "All Regions Clear", wipe the board
     if (state === 'green' && (nationwideScope || locations.includes('כלל האזורים') || locations.includes('כלל היישובים'))) {
+        // A nationwide all-clear is itself a timeline event: without a record
+        // here, replay would keep showing the earlier nationwide alert forever.
+        if (nationwideScope && ts && isViewingToday()) {
+            var nwClearKey = nationwideScope + '|' + (entry.alertDate || '').replace('T', ' ');
+            if (!extendedRids.has(nwClearKey)) {
+                extendedRids.add(nwClearKey);
+                extendedHistory.push({ location: nationwideScope, title: cleanTitle, alertDate: ts, state: 'green', nationwide: true });
+            }
+        }
         alertCacheSuspend++;
+        try {
         for (var activeCity in locationStates) {
+            recordHistory(activeCity, cleanTitle, entry.alertDate || '', 'green');
             applyThreatEvent(activeCity, cleanTitle, 'green', ts);
         }
+        } finally {
         alertCacheSuspend--;
         flushAlertCache();
+        }
         return;
     }
 
@@ -5563,6 +5584,7 @@ function processHistoryEntry(entry) {
         }
         var allLocs = allPolygonNames();
         alertCacheSuspend++;
+        try {
         for (var n = 0; n < allLocs.length; n++) {
             var nwLoc = allLocs[n];
             var nwState = resolveInheritedState(state, nwLoc);
@@ -5573,8 +5595,10 @@ function processHistoryEntry(entry) {
                 updateShadowState(nwLoc, nwState, ts);
             }
         }
+        } finally {
         alertCacheSuspend--;
         flushAlertCache();
+        }
         return;
     }
 
@@ -5834,16 +5858,23 @@ function processEntries(entries) {
     // so terrorist-infiltration alerts were silently discarded during replay
     // whenever any other state was already active at that location.
     var PRIORITY = { red: 5, brown: 3, purple: 2, yellow: 1, green: 0, hazmat: 3, earthquake: 4 };
-    var nwActive = null; // latest nationwide event at the replay point
+    var nwActive = {}; // {state: since} - every nationwide threat active at the replay point
     for (var i = 0; i < extendedHistory.length; i++) {
       var e = extendedHistory[i];
       if (e.alertDate > targetTime) break;
       if (e.state === 'unknown') continue; // Presence only, not a threat or an all-clear.
       if (e.nationwide) {
         // Country-wide events paint every polygon in the overlay pass below;
-        // here we only track the latest one at the replay point.
-        if (e.state === 'green') nwActive = null;
-        else nwActive = { state: e.state === 'inherit' ? 'red' : e.state, since: e.alertDate };
+        // here we only track which threats are active at the replay point.
+        if (e.state === 'green') {
+          // A country-wide all-clear wipes every threat, exactly like the
+          // live wipe - earlier local alerts must not survive it. Keeping
+          // them as fresh greens preserves the fade-out rendering.
+          for (var cleared in accumulated) accumulated[cleared] = { state: 'green', since: e.alertDate };
+          nwActive = {};
+        } else {
+          nwActive[e.state === 'inherit' ? 'red' : e.state] = e.alertDate;
+        }
         continue;
       }
       var existing = accumulated[e.location];
@@ -5883,17 +5914,28 @@ function processEntries(entries) {
       locationStates[loc] = { state: s, since: sinceTime };
     }
 
-    // Nationwide overlay: paint every polygon the per-location pass did not
-    // already set to an equal-or-higher-priority active state.
-    if (nwActive && (targetTime - nwActive.since) < ALERT_MAX_AGE_MS) {
+    // Nationwide overlay: paint every polygon with the strongest nationwide
+    // threat still active at the replay point, except where the per-location
+    // pass already set an equal-or-higher-priority active state or a clear
+    // that is newer than the nationwide alert.
+    var nwBest = null;
+    for (var nwState2 in nwActive) {
+      var nwSince = nwActive[nwState2];
+      if (targetTime - nwSince >= ALERT_MAX_AGE_MS) continue;
+      if (!nwBest || (PRIORITY[nwState2] || 0) > (PRIORITY[nwBest.state] || 0)) nwBest = { state: nwState2, since: nwSince };
+    }
+    if (nwBest) {
       var nwAll = allPolygonNames();
       for (var nwi = 0; nwi < nwAll.length; nwi++) {
         var nwName = nwAll[nwi];
         var nwExisting = accumulated[nwName];
-        if (nwExisting && nwExisting.state !== 'green' &&
-            (PRIORITY[nwExisting.state] || 0) >= (PRIORITY[nwActive.state] || 0)) continue;
-        applyFeatureStyle(nwName, nwActive.state, 0.3);
-        locationStates[nwName] = { state: nwActive.state, since: nwActive.since };
+        if (nwExisting) {
+          if (nwExisting.state === 'green') {
+            if (nwExisting.since >= nwBest.since) continue; // cleared after the nationwide alert began
+          } else if ((PRIORITY[nwExisting.state] || 0) >= (PRIORITY[nwBest.state] || 0)) continue;
+        }
+        applyFeatureStyle(nwName, nwBest.state, 0.3);
+        locationStates[nwName] = { state: nwBest.state, since: nwBest.since };
       }
     }
     // Re-apply highlight for selected location.
