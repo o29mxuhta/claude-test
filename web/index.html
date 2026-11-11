@@ -835,6 +835,13 @@ function setLocationState(name, state, since) {
     var PRIORITY = { red: 5, brown: 3, purple: 2, yellow: 1, green: 0, hazmat: 3, earthquake: 4 };
     var existing = locationStates[name];
 
+    if (existing && existing.state === 'green' && state !== 'green') {
+        // Mirror of the stale-all-clear guard below: the history feed replays
+        // the last hour every 10s, so an older response can arrive after the
+        // all-clear for the same event. A threat that STARTED before the
+        // clear must not revive the alert over it.
+        if (effectiveSince < existing.since) return;
+    }
     if (existing && existing.state !== 'green') {
         if (state === 'green') {
             // An all-clear only clears alerts that PRECEDE it. The history feed
@@ -1056,6 +1063,22 @@ function applyThreatEvent(name, title, state, since) {
       for (var i = 0; i < extendedHistory.length; i++) {
           var entry = extendedHistory[i];
           if (entry.state === 'green') continue; 
+
+          if (entry.nationwide) {
+              // A country-wide event heats every zone, not one imaginary point.
+              var nwNames = allPolygonNames();
+              for (var nwi = 0; nwi < nwNames.length; nwi++) {
+                  var nwCenter = _polygonCentroid(nwNames[nwi]);
+                  if (nwCenter) {
+                      heatmapFeatures.push({
+                          type: 'Feature',
+                          geometry: { type: 'Point', coordinates: nwCenter },
+                          properties: { intensity: 1 }
+                      });
+                  }
+              }
+              continue;
+          }
 
           var center = _polygonCentroid(entry.location);
           if (center) {
