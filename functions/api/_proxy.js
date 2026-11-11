@@ -152,6 +152,7 @@ const GREEN_TERMS = [
   'יכולים לצאת',
   'אינם צריכים לשהות',
   'סיום שהייה בסמיכות',
+  'הנחיות חזרה למבנים', // "רעידת אדמה - הנחיות חזרה למבנים": return-to-buildings is an all-clear
 ];
 
 const YELLOW_TERMS = [

@@ -4025,7 +4025,8 @@ function buildPolygons(data, onReady) {
     'החשש הוסר',
     'יכולים לצאת',
     'אינם צריכים לשהות',
-    'סיום שהייה בסמיכות'
+    'סיום שהייה בסמיכות',
+    'הנחיות חזרה למבנים'   // "רעידת אדמה - הנחיות חזרה למבנים": return-to-buildings is an all-clear
   ];
 
   // Threat titles, matched by substring so combined forms classify by threat.
@@ -5893,8 +5894,21 @@ function processEntries(entries) {
           // A country-wide all-clear wipes every threat, exactly like the
           // live wipe - earlier local alerts must not survive it. Keeping
           // them as fresh greens preserves the fade-out rendering.
-          for (var cleared in accumulated) accumulated[cleared] = { state: 'green', since: e.alertDate };
-          nwActive = {};
+          // A TITLED all-clear ("<threat> - האירוע הסתיים", return-to-buildings)
+          // ends only the named threat, mirroring applyThreatEvent: unrelated
+          // active threats survive the clear.
+          var nwEndThreat = explicitThreatIn(e.title);
+          if (nwEndThreat) {
+            if (nwActive[nwEndThreat] !== undefined && nwActive[nwEndThreat] <= e.alertDate) delete nwActive[nwEndThreat];
+            for (var clearedT in accumulated) {
+              if (accumulated[clearedT].state === nwEndThreat && accumulated[clearedT].since <= e.alertDate) {
+                accumulated[clearedT] = { state: 'green', since: e.alertDate };
+              }
+            }
+          } else {
+            for (var cleared in accumulated) accumulated[cleared] = { state: 'green', since: e.alertDate };
+            nwActive = {};
+          }
         } else {
           nwActive[e.state === 'inherit' ? 'red' : e.state] = e.alertDate;
         }
@@ -5911,7 +5925,12 @@ function processEntries(entries) {
       }
       if (existing) {
         if (eState === 'green') {
-          accumulated[e.location] = { state: 'green', since: e.alertDate };
+          // A TITLED all-clear ends only the named threat (mirrors
+          // applyThreatEvent): an unrelated active threat survives it.
+          var endThreat = explicitThreatIn(e.title);
+          if (!endThreat || (existing.state === endThreat && existing.since <= e.alertDate)) {
+            accumulated[e.location] = { state: 'green', since: e.alertDate };
+          }
           } else if (eState === existing.state || (PRIORITY[eState] || 0) > (PRIORITY[existing.state] || 0)) {
           accumulated[e.location] = { state: eState, since: e.alertDate };
         }
