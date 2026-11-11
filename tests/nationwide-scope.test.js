@@ -87,6 +87,8 @@ var recordSrc = extractFunction(html, 'recordHistory');
 var historyEntrySrc = extractFunction(html, 'processHistoryEntry');
 var processEntriesSrc = extractFunction(html, 'processEntries');
 var reconstructSrc = extractFunction(html, 'reconstructStateAt');
+var heatmapSrc = extractFunction(html, 'generateHeatmapData');
+assert(!!heatmapSrc, 'extracted generateHeatmapData');
 var liveStatusSrc = extractFunction(html, 'updateLiveStatus');
 assert(!!setStateSrc && !!resolveSrc && !!resolveLocSrc && !!expandSrc && !!parseDateSrc &&
   !!recordSrc && !!historyEntrySrc && !!processEntriesSrc && !!reconstructSrc && !!liveStatusSrc,
@@ -162,7 +164,7 @@ vm.runInContext([
   classificationSrc, normalizeSrc, 'var nameIndex = { exact: {}, base: {}, zone: {} };',
   resolveLocSrc, unresolvedSrc, expandSrc, nationwideSrc, threatsSrc, setStateSrc,
   resolveSrc, cacheSrc, parseDateSrc, recordSrc, historyEntrySrc, processEntriesSrc,
-  reconstructSrc, liveStatusSrc
+  reconstructSrc, liveStatusSrc, heatmapSrc
 ].join('\n'), sandbox);
 
 var QUAKE_TITLE = 'רעידת אדמה - צאו לשטח פתוח';
@@ -191,7 +193,7 @@ function unresolvedCount() {
 section('1. nationwideScopeOf matches only the exact whole-data scope');
 assert(sandbox.nationwideScopeOf([SCOPE]) === SCOPE, 'exact scope string matches');
 assert(sandbox.nationwideScopeOf(['בחלק מהאזורים בארץ']) !== null, 'repeated literal matches');
-assert(sandbox.nationwideScopeOf(['‏בחלק מהאזורים בארץ‎']) !== null, 'bidi-marked scope matches');
+assert(sandbox.nationwideScopeOf(['‏בחלק מהאזורים בארץ‎']) === SCOPE, 'bidi-marked scope matches and returns the clean label');
 assert(sandbox.nationwideScopeOf(['חיפה']) === null, 'a zone name is not a scope');
 assert(sandbox.nationwideScopeOf(['בארץ']) === null, 'a substring is not a scope');
 assert(sandbox.nationwideScopeOf([SCOPE, 'חיפה']) === null, 'multi-value data is not a scope');
@@ -221,6 +223,8 @@ assert(sandbox.extendedHistory.length === 1, 'replayed entry does not duplicate 
 section('3. A green nationwide event wipes the board');
 resetAll();
 sandbox.processHistoryEntry({ alertDate: feedTs(t0), title: QUAKE_TITLE, data: SCOPE, category: 7 });
+var cacheBeforeClear = JSON.parse(store['oref-active-alerts'] || '{}');
+assert(Object.keys(cacheBeforeClear).length > 0, 'cache actually persisted the quake before the clear (non-vacuous check)');
 sandbox.processHistoryEntry({ alertDate: feedTs(new Date()), title: 'האירוע הסתיים', data: SCOPE, category: 7 });
 ZONES.forEach(function (z) {
   assert(sandbox.locationStates[z] && sandbox.locationStates[z].state === 'green',
@@ -343,6 +347,41 @@ assert(threw, 'the throwing helper propagated');
 assert(vm.runInContext('alertCacheSuspend', sandbox) === 0,
   'cache suspension released on throw, got ' + vm.runInContext('alertCacheSuspend', sandbox));
 resetAll();
+
+
+section('9. Stale feed responses and heatmap');
+// 9a. A late older replay of the quake must not revive zones cleared by the all-clear.
+resetAll();
+sandbox.processHistoryEntry({ alertDate: feedTs(t0), title: QUAKE_TITLE, data: SCOPE, category: 7 });
+var tClear = new Date(t0.getTime() + 300000);
+sandbox.processHistoryEntry({ alertDate: feedTs(tClear), title: 'האירוע הסתיים', data: SCOPE, category: 7 });
+ZONES.forEach(function (z) {
+  assert(sandbox.locationStates[z] && sandbox.locationStates[z].state === 'green', z + ' cleared');
+});
+sandbox.processHistoryEntry({ alertDate: feedTs(t0), title: QUAKE_TITLE, data: SCOPE, category: 7 });
+ZONES.forEach(function (z) {
+  assert(sandbox.locationStates[z] && sandbox.locationStates[z].state === 'green',
+    z + ' stays cleared when the older alert replays late, got ' + (sandbox.locationStates[z] || {}).state);
+});
+
+// 9b. Heatmap: a nationwide event contributes a point for every polygon.
+resetAll();
+var heatFeatures = null;
+vm.runInContext(
+  'mapLoaded = true; _polygonCentroid = function (n) { return [n.length, n.charCodeAt(0)]; };' +
+  'map = { getSource: function () { return { setData: function (d) { __heat = d; } }; } };',
+  sandbox);
+vm.runInContext('var __heat = null;', sandbox);
+sandbox.extendedHistory.push({ location: SCOPE, title: QUAKE_TITLE, alertDate: t0.getTime(), state: 'earthquake', nationwide: true });
+sandbox.generateHeatmapData();
+heatFeatures = vm.runInContext('__heat ? __heat.features.length : -1', sandbox);
+assert(heatFeatures === 3, 'nationwide event heats all 3 polygons, got ' + heatFeatures);
+resetAll();
+vm.runInContext('__heat = null;', sandbox);
+sandbox.extendedHistory.push({ location: 'חיפה', title: 'ירי רקטות', alertDate: t0.getTime(), state: 'red' });
+sandbox.generateHeatmapData();
+heatFeatures = vm.runInContext('__heat ? __heat.features.length : -1', sandbox);
+assert(heatFeatures === 1, 'a city alert still contributes exactly one point, got ' + heatFeatures);
 
 console.log('\nnationwide-scope: ' + passed + ' passed, ' + failed + ' failed');
 process.exit(failed ? 1 : 0);
