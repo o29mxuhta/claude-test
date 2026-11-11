@@ -90,6 +90,8 @@ var reconstructSrc = extractFunction(html, 'reconstructStateAt');
 var heatmapSrc = extractFunction(html, 'generateHeatmapData');
 assert(!!heatmapSrc, 'extracted generateHeatmapData');
 var liveStatusSrc = extractFunction(html, 'updateLiveStatus');
+var reconcileSrc = extractFunction(html, 'reconcileRestoredAlerts');
+assert(!!reconcileSrc, 'extracted reconcileRestoredAlerts');
 assert(!!setStateSrc && !!resolveSrc && !!resolveLocSrc && !!expandSrc && !!parseDateSrc &&
   !!recordSrc && !!historyEntrySrc && !!processEntriesSrc && !!reconstructSrc && !!liveStatusSrc,
   'extracted every function under test');
@@ -164,7 +166,7 @@ vm.runInContext([
   classificationSrc, normalizeSrc, 'var nameIndex = { exact: {}, base: {}, zone: {} };',
   resolveLocSrc, unresolvedSrc, expandSrc, nationwideSrc, threatsSrc, setStateSrc,
   resolveSrc, cacheSrc, parseDateSrc, recordSrc, historyEntrySrc, processEntriesSrc,
-  reconstructSrc, liveStatusSrc, heatmapSrc
+  reconstructSrc, liveStatusSrc, heatmapSrc, reconcileSrc
 ].join('\n'), sandbox);
 
 var QUAKE_TITLE = 'רעידת אדמה - צאו לשטח פתוח';
@@ -443,6 +445,53 @@ sandbox.extendedHistory.push({ location: SCOPE, title: 'האירוע הסתיי�
 sandbox.reconstructStateAt(t0.getTime() + 120000);
 assert(sandbox.locationStates['אילת'] && sandbox.locationStates['אילת'].state === 'green',
   'untitled nationwide all-clear still wipes rockets, got ' + (sandbox.locationStates['אילת'] || {}).state);
+
+section('12. Reload reconciliation: cached threats end via today\'s clears');
+// Gil's stuck map: old code cached the earthquake threat; after deploy+reload
+// the 12:14 titled clear must end it.
+resetAll();
+sandbox.locationThreats['אילת'] = { earthquake: t0.getTime() };
+sandbox.locationStates['אילת'] = { state: 'earthquake', since: t0.getTime() };
+sandbox.extendedHistory.push({ location: 'אילת', title: 'רעידת אדמה - הנחיות חזרה למבנים', alertDate: t0.getTime() + 60000, state: 'green' });
+sandbox.reconcileRestoredAlerts();
+assert(sandbox.locationStates['אילת'] && sandbox.locationStates['אילת'].state === 'green',
+  'restored quake zone clears green on reload, got ' + (sandbox.locationStates['אילת'] || {}).state);
+assert(!sandbox.locationThreats['אילת'], 'restored earthquake threat removed');
+// An unrelated restored threat survives a titled clear.
+resetAll();
+sandbox.locationThreats['אילת'] = { red: t0.getTime(), earthquake: t0.getTime() };
+sandbox.locationStates['אילת'] = { state: 'red', since: t0.getTime() };
+sandbox.extendedHistory.push({ location: 'אילת', title: 'רעידת אדמה - הנחיות חזרה למבנים', alertDate: t0.getTime() + 60000, state: 'green' });
+sandbox.reconcileRestoredAlerts();
+assert(sandbox.locationStates['אילת'] && sandbox.locationStates['אילת'].state === 'red',
+  'rockets survive the titled clear on reload, got ' + (sandbox.locationStates['אילת'] || {}).state);
+assert(sandbox.locationThreats['אילת'] && sandbox.locationThreats['אילת'].red !== undefined &&
+  sandbox.locationThreats['אילת'].earthquake === undefined, 'only the earthquake threat ended');
+// A nationwide titled clear ends matching restored threats everywhere.
+resetAll();
+sandbox.locationThreats['אילת'] = { earthquake: t0.getTime() };
+sandbox.locationStates['אילת'] = { state: 'earthquake', since: t0.getTime() };
+sandbox.locationThreats['חיפה'] = { red: t0.getTime() };
+sandbox.locationStates['חיפה'] = { state: 'red', since: t0.getTime() };
+sandbox.extendedHistory.push({ location: SCOPE, title: 'רעידת אדמה - הנחיות חזרה למבנים', alertDate: t0.getTime() + 60000, state: 'green', nationwide: true });
+sandbox.reconcileRestoredAlerts();
+assert(sandbox.locationStates['אילת'] && sandbox.locationStates['אילת'].state === 'green',
+  'nationwide titled clear greens the quake zone, got ' + (sandbox.locationStates['אילת'] || {}).state);
+assert(sandbox.locationStates['חיפה'] && sandbox.locationStates['חיפה'].state === 'red',
+  'rockets zone untouched by the nationwide titled clear, got ' + (sandbox.locationStates['חיפה'] || {}).state);
+// A threat that STARTED after the clear was issued is not erased.
+resetAll();
+sandbox.locationThreats['אילת'] = { earthquake: t0.getTime() + 120000 };
+sandbox.locationStates['אילת'] = { state: 'earthquake', since: t0.getTime() + 120000 };
+sandbox.extendedHistory.push({ location: 'אילת', title: 'רעידת אדמה - הנחיות חזרה למבנים', alertDate: t0.getTime() + 60000, state: 'green' });
+sandbox.reconcileRestoredAlerts();
+assert(sandbox.locationStates['אילת'] && sandbox.locationStates['אילת'].state === 'earthquake',
+  'a threat newer than the clear survives reconciliation, got ' + (sandbox.locationStates['אילת'] || {}).state);
+// Nothing restored: reconciliation is a no-op and cannot paint phantom greens.
+resetAll();
+sandbox.extendedHistory.push({ location: 'אילת', title: 'רעידת אדמה - הנחיות חזרה למבנים', alertDate: t0.getTime() + 60000, state: 'green' });
+sandbox.reconcileRestoredAlerts();
+assert(Object.keys(sandbox.locationStates).length === 0, 'no restored threats means no state changes');
 
 console.log('\nnationwide-scope: ' + passed + ' passed, ' + failed + ' failed');
 process.exit(failed ? 1 : 0);
