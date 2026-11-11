@@ -94,6 +94,10 @@ var reconcileSrc = extractFunction(html, 'reconcileRestoredAlerts');
 assert(!!reconcileSrc, 'extracted reconcileRestoredAlerts');
 var nwActiveSrc = extractFunction(html, 'nationwideActiveThreats');
 var nwCoverageSrc = extractFunction(html, 'restoredNationwideCoverage');
+var fadeSrc = extractFunction(html, 'fadeGreenMarkers');
+var removeLocSrc = extractFunction(html, 'removeLocation');
+var loadCachedSrc = extractFunction(html, 'loadCachedAlerts');
+assert(!!fadeSrc && !!removeLocSrc && !!loadCachedSrc, 'extracted expiry and cache-restore functions');
 assert(!!nwCoverageSrc, 'extracted restoredNationwideCoverage');
 var nwThreatSrc = extractFunction(html, 'nationwideThreatActive');
 var endNwSrc = extractFunction(html, 'endNationwideThreatForNamedClear');
@@ -169,6 +173,8 @@ var sandbox = {
   _applyPanelHighlight: function () {},
   updateShadowState: function () {},
   shouldAutoZoomToEvents: function () { return false; },
+  map: { setFeatureState: function () {}, removeFeatureState: function () {} },
+  mapLoaded: true,
 };
 vm.createContext(sandbox);
 vm.runInContext([
@@ -176,7 +182,8 @@ vm.runInContext([
   resolveLocSrc, unresolvedSrc, expandSrc, nationwideSrc, threatsSrc, setStateSrc,
   resolveSrc, cacheSrc, parseDateSrc, recordSrc, historyEntrySrc, processEntriesSrc,
   reconstructSrc, liveStatusSrc, heatmapSrc, reconcileSrc,
-  'var nationwideEndedThreats = {};', nwCoverageSrc, nwActiveSrc, nwThreatSrc, endNwSrc, liveSrc
+  'var nationwideEndedThreats = {};', nwCoverageSrc, nwActiveSrc, nwThreatSrc, endNwSrc, liveSrc,
+  fadeSrc, removeLocSrc, loadCachedSrc
 ].join('\n'), sandbox);
 // resolveLocation() consults nameIndex, which cities.json fills in the real
 // app; seed the three test zones with their folded forms as keys.
@@ -701,6 +708,62 @@ assert(sandbox.nationwideThreatActive('earthquake', t0.getTime() + 60000) === tr
   'restored 95% coverage counts as nationwide-active');
 assert(sandbox.nationwideThreatActive('red', t0.getTime() + 60000) === false,
   'an absent threat is not nationwide-active');
+
+section('15. Earthquake auto-release after one hour (Gil 2026-11-11)');
+
+// The heatmap test replaced the global map with a minimal stub - restore it.
+vm.runInContext('map = { setFeatureState: function () {}, removeFeatureState: function () {} };', sandbox);
+
+// 15a. Under the old 30-minute default a quake paint lapsed early: at 45
+// minutes it must still be displayed (dimmed, but present).
+resetAll();
+sandbox.locationStates['אילת'] = { state: 'earthquake', since: Date.now() - 45 * 60000 };
+sandbox.locationThreats['אילת'] = { earthquake: Date.now() - 45 * 60000 };
+sandbox.fadeGreenMarkers();
+assert(sandbox.locationStates['אילת'] && sandbox.locationStates['אילת'].state === 'earthquake',
+  'quake paint survives at 45 minutes');
+
+// 15b. At 61 minutes with no newer directive the paint auto-releases - clean,
+// not green (a local timeout is not an official all-clear).
+resetAll();
+sandbox.locationStates['אילת'] = { state: 'earthquake', since: Date.now() - 61 * 60000 };
+sandbox.locationThreats['אילת'] = { earthquake: Date.now() - 61 * 60000 };
+sandbox.fadeGreenMarkers();
+assert(!sandbox.locationStates['אילת'] && !sandbox.locationThreats['אילת'],
+  'quake paint auto-releases after one hour, got ' + JSON.stringify(sandbox.locationStates['אילת'] || null));
+assert((sandbox.localStorage.getItem('oref-active-alerts') || '{}') === '{}',
+  'released paint also drops out of the persisted cache');
+
+// 15c. An active Pikud HaOref directive renews the hour: a newer quake event
+// refreshes the zone's `since`, so the paint survives past the first hour.
+resetAll();
+sandbox.locationStates['אילת'] = { state: 'earthquake', since: Date.now() - 55 * 60000 };
+sandbox.locationThreats['אילת'] = { earthquake: Date.now() - 55 * 60000 };
+// New directive 10 minutes ago (aftershock / renewed instruction).
+sandbox.applyThreatEvent('אילת', QUAKE_TITLE, 'earthquake', Date.now() - 10 * 60000);
+sandbox.fadeGreenMarkers();
+assert(sandbox.locationStates['אילת'] && sandbox.locationStates['אילת'].state === 'earthquake',
+  'paint with an active directive is not released');
+
+// 15d. Rockets keep the 30-minute default (regression guard).
+resetAll();
+sandbox.locationStates['חיפה'] = { state: 'red', since: Date.now() - 31 * 60000 };
+sandbox.locationThreats['חיפה'] = { red: Date.now() - 31 * 60000 };
+sandbox.fadeGreenMarkers();
+assert(!sandbox.locationStates['חיפה'], 'rockets still expire at 30 minutes');
+
+// 15e. Cache restore honors the same window: a quake older than one hour
+// stays expired across reload; a younger one restores; hazmat is unchanged.
+resetAll();
+sandbox.localStorage.setItem('oref-active-alerts', JSON.stringify({
+  'אילת': { threats: { earthquake: Date.now() - 2 * 3600000 } },
+  'חיפה': { threats: { earthquake: Date.now() - 20 * 60000 } },
+  'עפולה': { threats: { hazmat: Date.now() - 3 * 3600000 } }
+}));
+sandbox.loadCachedAlerts();
+assert(!sandbox.locationThreats['אילת'], 'quake older than one hour is not restored');
+assert(sandbox.locationThreats['חיפה'] && sandbox.locationThreats['חיפה'].earthquake, 'recent quake restores');
+assert(sandbox.locationThreats['עפולה'] && sandbox.locationThreats['עפולה'].hazmat, 'hazmat still restores regardless of age');
 
 console.log('\nnationwide-scope: ' + passed + ' passed, ' + failed + ' failed');
 process.exit(failed ? 1 : 0);
