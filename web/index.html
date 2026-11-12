@@ -4183,7 +4183,7 @@ function buildPolygons(data, onReady) {
   // older timestamp must not repaint zones the clear already ended.
   var nationwideEndedThreats = {}; // threat -> end ts
 
-  function nationwideActiveThreats(ts) {
+  function nationwideActivesMap(ts) {
     var actives = {}; // threat -> latest nationwide start ts
     if (typeof extendedHistory === 'undefined') return [];
     for (var i = 0; i < extendedHistory.length; i++) {
@@ -4209,7 +4209,29 @@ function buildPolygons(data, onReady) {
     for (var t2 in nationwideEndedThreats) {
       if (actives[t2] !== undefined && actives[t2] <= nationwideEndedThreats[t2]) delete actives[t2];
     }
-    return Object.keys(actives);
+    return actives;
+  }
+
+  function nationwideActiveThreats(ts) {
+    return Object.keys(nationwideActivesMap(ts));
+  }
+
+  // The start time of the nationwide paint active for `threat` at ts, or null
+  // when no such paint is active. A paint restored from the cache has no
+  // timeline record; the newest per-zone paint time is the effective start.
+  function nationwideThreatStartTs(threat, ts) {
+    if (!threat) return null;
+    var start = nationwideActivesMap(ts)[threat];
+    if (start !== undefined) return start;
+    if (restoredNationwideCoverage(threat, ts)) {
+      var latest = 0;
+      for (var zone in locationThreats) {
+        var zt = locationThreats[zone];
+        if (zt && zt[threat] !== undefined && (!ts || zt[threat] <= ts)) latest = Math.max(latest, zt[threat]);
+      }
+      return latest > 0 ? latest : null;
+    }
+    return null;
   }
 
   // A nationwide start can be missing from today's timeline (the paint was
@@ -4289,6 +4311,30 @@ function buildPolygons(data, onReady) {
       }
     }
     if (touched && typeof updateLiveStatus === 'function') updateLiveStatus();
+  }
+
+  // --- Nationwide scope REFINEMENT (observed 2026-11-11) ---
+  // Oref can issue a generic-scope alert ("בחלק מהאזורים בארץ") and, seconds
+  // later, a SAME-THREAT alert naming the cities actually alerted (2026-11-11
+  // 11:25 quake: the generic directive named no zones; a companion alert 2s
+  // later listed 5 Eilat-area cities). The generic record fans out to every
+  // polygon; a named companion landing within this window refines the scope:
+  // the paint collapses to the named zones.
+  var NATIONWIDE_REFINE_WINDOW_MS = 60000;
+  // Only concrete threat states refine - never greens (those are clears),
+  // yellow pre-alerts, or generic shelter commands.
+  var NATIONWIDE_REFINE_STATES = { red: 1, purple: 1, brown: 1, hazmat: 1, earthquake: 1 };
+
+  // The start ts of the active nationwide paint that a named alert of `state`
+  // issued at `alertTs` refines, or null when the alert is not a refinement:
+  // no paint active, a different threat, or outside the window (a genuinely
+  // separate later event must not collapse the paint).
+  function nationwideRefinementStartTs(state, alertTs) {
+    if (NATIONWIDE_REFINE_STATES[state] !== 1 || !alertTs) return null;
+    var start = nationwideThreatStartTs(state, alertTs);
+    if (start === null || start === undefined) return null;
+    if (alertTs < start || alertTs - start > NATIONWIDE_REFINE_WINDOW_MS) return null;
+    return start;
   }
 
   function classifyTitle(title) {
@@ -5606,6 +5652,18 @@ function allPolygonNames() {
     // suspended, or no later alert would ever persist again.
     if (nationwideFanout) { alertCacheSuspend--; flushAlertCache(); }
     }
+    // NATIONWIDE SCOPE REFINEMENT: a same-threat alert naming zones, landing
+    // within the refinement window of a generic-scope fan-out, is Oref
+    // refining the scope (2026-11-11 11:25 quake: the generic directive
+    // painted every polygon; a companion alert 2s later named the 5 cities
+    // actually alerted). Collapse the paint to the named zones - unnamed
+    // zones end clean (a scope correction is not an all-clear, so no green).
+    // Runs AFTER the loop so the named zones apply before the sweep's
+    // tombstone could block them.
+    if (!nationwideFanout && locations.length > 0 &&
+        nationwideRefinementStartTs(state, eventTs || Date.now()) !== null) {
+      endNationwideThreatForNamedClear(state, locations, eventTs || Date.now());
+    }
     if (droppedCities.length > 0) console.warn("⚠️ Dropped Cities:", droppedCities);
     if (processedCount > 0) console.log("✅ Processed " + processedCount + " cities.");
     
@@ -6037,6 +6095,12 @@ function processHistoryEntry(entry) {
           }
       }
     }
+    // Nationwide scope refinement (see processLiveAlert): a named same-threat
+    // alert within the window collapses the generic-scope fan-out.
+    if (!nationwideScope && locations.length > 0 && ts &&
+        nationwideRefinementStartTs(state, ts) !== null) {
+      endNationwideThreatForNamedClear(state, locations, ts);
+    }
   }
 
 function processHistoryEntries(entries) {
@@ -6362,6 +6426,14 @@ function processEntries(entries) {
         if (namedClearThreat && nwActive[namedClearThreat] !== undefined && nwActive[namedClearThreat] <= e.alertDate) {
           delete nwActive[namedClearThreat];
         }
+      }
+      // Scope refinement: a named SAME-THREAT alert within the window of a
+      // nationwide start shrinks the overlay to the named zones (2026-11-11
+      // quake: 5 Eilat-area cities named 2s after the generic scope).
+      if (NATIONWIDE_REFINE_STATES[eState] === 1 && nwActive[eState] !== undefined &&
+          nwActive[eState] <= e.alertDate &&
+          e.alertDate - nwActive[eState] <= NATIONWIDE_REFINE_WINDOW_MS) {
+        delete nwActive[eState];
       }
       if (existing) {
         if (eState === 'green') {
