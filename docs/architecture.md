@@ -83,7 +83,7 @@ Several placement strategies were tested before finding a working solution:
 
 ### Edge caching
 
-Both the Pages Functions and the Worker use the Cloudflare Cache API (`caches.default`) with `s-maxage=1` to cache Oref responses at each edge for 1 second. This reduces redundant fetches when many clients poll simultaneously. The browser cache uses `max-age=2` (matching the previous behavior).
+Both the Pages Functions and the Workers use the Cloudflare Cache API (`caches.default`) to cache Oref responses at each edge and reduce redundant fetches when many clients poll simultaneously. The Pages Functions use `s-maxage=1`; the live proxy Workers (`redmap-live-api`, `redmap-live-backup`) use `s-maxage=4, max-age=3` (since 2026-11-12) to cut upstream request volume further. Only validated status-200 payloads are cached; 403/5xx/502 pass through with `no-store` so a blocked upstream never looks like "no alerts". The Workers key the cache on origin+path (the client appends cache-busting query params), coalesce concurrent misses through an in-flight map, and mark responses `X-Cache: HIT/MISS`.
 
 ### Unknown title detection
 

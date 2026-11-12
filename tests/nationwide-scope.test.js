@@ -92,7 +92,14 @@ assert(!!heatmapSrc, 'extracted generateHeatmapData');
 var liveStatusSrc = extractFunction(html, 'updateLiveStatus');
 var reconcileSrc = extractFunction(html, 'reconcileRestoredAlerts');
 assert(!!reconcileSrc, 'extracted reconcileRestoredAlerts');
+var nwActivesMapSrc = extractFunction(html, 'nationwideActivesMap');
 var nwActiveSrc = extractFunction(html, 'nationwideActiveThreats');
+var nwStartTsSrc = extractFunction(html, 'nationwideThreatStartTs');
+var refineStart = html.indexOf('var NATIONWIDE_REFINE_WINDOW_MS');
+var refineGateFn = extractFunction(html, 'nationwideRefinementStartTs');
+assert(refineStart !== -1 && !!refineGateFn, 'extracted the refinement block');
+var refineSrc = html.slice(refineStart, html.indexOf(refineGateFn) + refineGateFn.length);
+assert(!!nwActivesMapSrc && !!nwStartTsSrc, 'extracted nationwide actives map + start-ts helpers');
 var nwCoverageSrc = extractFunction(html, 'restoredNationwideCoverage');
 var fadeSrc = extractFunction(html, 'fadeGreenMarkers');
 var removeLocSrc = extractFunction(html, 'removeLocation');
@@ -186,7 +193,8 @@ vm.runInContext([
   resolveLocSrc, unresolvedSrc, expandSrc, nationwideSrc, threatsSrc, setStateSrc,
   resolveSrc, cacheSrc, parseDateSrc, recordSrc, historyEntrySrc, processEntriesSrc,
   reconstructSrc, liveStatusSrc, heatmapSrc, reconcileSrc,
-  'var nationwideEndedThreats = {};', nwCoverageSrc, nwActiveSrc, nwThreatSrc, endNwSrc, liveSrc,
+  'var nationwideEndedThreats = {};', nwCoverageSrc, nwActivesMapSrc, nwActiveSrc, nwStartTsSrc,
+  refineSrc, nwThreatSrc, endNwSrc, liveSrc,
   fadeSrc, removeLocSrc, loadCachedSrc
 ].join('\n'), sandbox);
 // resolveLocation() consults nameIndex, which cities.json fills in the real
