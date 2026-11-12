@@ -62,6 +62,7 @@ async function suite(){
   caches.advance(1000);
   r2=await get('/api2/alerts');
   assert.equal(r2.headers.get('X-Cache'),'HIT');
+  assert.notEqual(r1.headers.get('X-Source-Checked-At'),null,'MISS must carry a real upstream check time');
   assert.equal(r1.headers.get('X-Source-Checked-At'),r2.headers.get('X-Source-Checked-At'));
 
   // 5: X-Source-Request-Id is echoed per request, never served from the cache
@@ -103,11 +104,35 @@ async function suite(){
   r1=await get('/api2/history');assert.equal(await r1.text(),'[]');
   r2=await get('/api2/history');assert.equal(calls,1);assert.equal(await r2.text(),'[]');
 
-  // 10: without a caches global (older runtimes) the worker still proxies live
+  // 10: concurrent misses coalesce into one upstream fetch
+  calls=0;caches=mockCaches();
+  let resolveUpstream;
+  get=load(async()=>{calls++;return new Promise(res=>{resolveUpstream=res;});},caches);
+  const p1=get('/api2/alerts','?_source_request=aaaaaaaaaaaaaaaa');
+  const p2=get('/api2/alerts','?_source_request=bbbbbbbbbbbbbbbb');
+  await new Promise(r=>setTimeout(r,20));
+  resolveUpstream(new Response(ALERTS,{status:200}));
+  const [c1,c2]=await Promise.all([p1,p2]);
+  assert.equal(calls,1,'concurrent polls must share one upstream fetch');
+  assert.equal(c1.status,200);assert.equal(c2.status,200);
+  assert.equal(c1.headers.get('X-Source-Request-Id'),'aaaaaaaaaaaaaaaa');
+  assert.equal(c2.headers.get('X-Source-Request-Id'),'bbbbbbbbbbbbbbbb');
+  const marks=[c1.headers.get('X-Cache'),c2.headers.get('X-Cache')].sort().join(',');
+  assert.equal(marks,'HIT,MISS','one request originates (MISS), the other shares (HIT)');
+
+  // 11: a non-200 2xx (204) passes through but is never cached
+  calls=0;caches=mockCaches();
+  get=load(async()=>{calls++;return new Response(null,{status:204});},caches);
+  r1=await get('/api2/alerts');r2=await get('/api2/alerts');
+  assert.equal(r1.status,204);assert.equal(r2.status,204);
+  assert.equal(calls,2,'non-200 2xx must not be cached');
+  assert.equal(r1.headers.get('Cache-Control'),'no-store');
+
+  // 12: without a caches global (older runtimes) the worker still proxies live
   calls=0;
   get=load(async()=>{calls++;return new Response(ALERTS,{status:200});},undefined);
   r1=await get('/api2/alerts');r2=await get('/api2/alerts');
   assert.equal(r1.status,200);assert.equal(calls,2,'no cache global -> every poll fetches upstream');
 }
 
-(async()=>{for(const w of WORKERS){SRC=path.join(__dirname,'..','workers',w,'worker.js');await suite();console.log(w+': 10 tests passed');}})().catch(e=>{console.error(e);process.exit(1)});
+(async()=>{for(const w of WORKERS){SRC=path.join(__dirname,'..','workers',w,'worker.js');await suite();console.log(w+': 12 tests passed');}})().catch(e=>{console.error(e);process.exit(1)});
