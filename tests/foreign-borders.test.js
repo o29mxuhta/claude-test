@@ -22,6 +22,7 @@ vm.runInContext(html.slice(scaleStart, scaleEnd) + '\n' + html.slice(start, end)
 
 var input = [
   { id: 'earth', type: 'fill', source: 'protomaps', 'source-layer': 'earth', paint: { 'fill-color': '#000' } },
+  { id: 'water', type: 'fill', source: 'protomaps', 'source-layer': 'water', paint: { 'fill-color': '#1e3048' } },
   { id: 'boundaries_country', type: 'line', source: 'protomaps', 'source-layer': 'boundaries',
     paint: { 'line-color': '#999', 'line-width': 1 } }
 ];
@@ -46,7 +47,10 @@ function evalFilter(f, props) {
   assert(!!foreign, tag + ': boundaries_foreign is in the rendered layer list');
   assert(!!israel, tag + ': Israel border layer still rendered');
   if (!foreign || !israel) return;
-  assert(out.indexOf(foreign) < out.indexOf(israel), tag + ': foreign borders drawn under Israel border');
+  var ids = out.map(function (l) { return l.id; });
+  assert(ids.indexOf('boundaries_foreign') > ids.indexOf('boundaries_country'), tag + ': foreign borders drawn above the basemap Israel border');
+  assert(ids.indexOf('foreign-water-hide') !== -1, tag + ': opaque outside-zone mask is built in this fixture');
+  assert(ids.indexOf('boundaries_foreign') > ids.indexOf('foreign-water-hide'), tag + ': foreign borders drawn above the opaque outside-zone mask (else invisible)');
   assert(foreign.type === 'line' && foreign.source === 'protomaps' && foreign['source-layer'] === 'boundaries',
     tag + ': uses the basemap boundaries source layer');
   assert(JSON.stringify(foreign.paint['line-dasharray']) === '[4,3]', tag + ': dashed');
