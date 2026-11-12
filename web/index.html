@@ -2105,28 +2105,6 @@ var RED_SEA_MASK = [[20.0, 10.0], [45.0, 10.0], [45.0, 29.488], [20.0, 29.488], 
           ]
         ];
         if (l.paint) l.paint['line-width'] = 2.5; // Slightly thicker so it pops
-        // Neighbouring countries: thin dashed grey borders so the surroundings read as
-        // context while Israel's solid border stays the emphasised one. Country
-        // borders only (no disputed West Bank/Golan outlines, per Gil 2026-11-12).
-        cleanLayers.push({
-          id: 'boundaries_foreign',
-          type: 'line',
-          source: l.source,
-          'source-layer': l['source-layer'],
-          filter: [
-            'all',
-            ['<=', 'kind_detail', 2],
-            ['!=', 'disputed', true],
-            ['!=', 'adm0_l', 'ISR'],
-            ['!=', 'adm0_r', 'ISR']
-          ],
-          paint: {
-            'line-color': isDark ? '#b8b8b8' : '#8a8a8a',
-            'line-opacity': 0.75,
-            'line-width': 1.3,
-            'line-dasharray': [4, 3]
-          }
-        });
       }
       
       // 🚨 HIDE ALL OTHER INTERNAL BOUNDARIES
@@ -2287,6 +2265,31 @@ var IS_SEA = ['in', ['get', 'kind'], ['literal', ['ocean', 'sea']]];
                    'fill-opacity': isDark ? 0.16 : 0.10 } }
       ]));
     }
+
+
+    // Neighbouring countries: thin dashed grey borders so the surroundings read as
+    // context while Israel's solid border stays the emphasised one. Country
+    // borders only (no disputed West Bank/Golan outlines, per Gil 2026-11-12).
+    // Added LAST: the opaque outside-zone land mask above would otherwise cover them.
+    cleanLayers.push({
+      id: 'boundaries_foreign',
+      type: 'line',
+      source: 'protomaps',
+      'source-layer': 'boundaries',
+      filter: [
+        'all',
+        ['<=', 'kind_detail', 2],
+        ['!=', 'disputed', true],
+        ['!=', 'adm0_l', 'ISR'],
+        ['!=', 'adm0_r', 'ISR']
+      ],
+      paint: {
+        'line-color': isDark ? '#b8b8b8' : '#8a8a8a',
+        'line-opacity': 0.75,
+        'line-width': 1.3,
+        'line-dasharray': [4, 3]
+      }
+    });
 
     return cleanLayers;
   }
