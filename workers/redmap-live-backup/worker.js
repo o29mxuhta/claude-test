@@ -20,6 +20,86 @@ const orefHeaders = {
 // as an error, never as "no alerts".
 const EDGE_CACHE_CONTROL = 's-maxage=4, max-age=3';
 
+// In-flight upstream fetches, keyed like the edge cache: polls that arrive
+// while one upstream fetch is still running share it instead of each fetching
+// Oref on their own. Module scope persists across requests within an isolate.
+const INFLIGHT_UPSTREAM = new Map();
+
+const EMPTY_JSON_BODY = new TextEncoder().encode('[]').buffer;
+
+// Builds one response from a shared (cached or coalesced) upstream snapshot and
+// applies the per-request decoration: the X-Cache mark and the _source_request
+// echo. X-Source-Request-Id always comes from THIS request, never from the id
+// another request cached or started with. X-Source-Checked-At is left as stored:
+// it is when the upstream was actually checked, so clients can see the data age.
+function serveSharedSnapshot(status, body, headers, url, cacheMark) {
+    const respHeaders = new Headers(headers);
+    respHeaders.set('X-Cache', cacheMark);
+    respHeaders.delete('X-Source-Request-Id');
+    const requestId = url.searchParams.get('_source_request');
+    if (requestId && /^[a-zA-Z0-9-]{16,100}$/.test(requestId)) respHeaders.set('X-Source-Request-Id', requestId);
+    // Null-body statuses (204 etc.) reject a non-null body, even an empty one.
+    const nullBody = [101, 204, 205, 304].includes(status) ? null : body;
+    return new Response(nullBody, { status, headers: respHeaders });
+}
+
+// One upstream fetch for an Oref proxy endpoint: tries the documented paths in
+// order, falling through only on 404, and validates the payload. Returns a plain
+// snapshot that concurrent requests can share and the edge cache can store.
+// Errors pass through unchanged with Cache-Control: no-store and are never
+// cacheable, so a blocked upstream surfaces as an error, never as "no alerts".
+async function fetchUpstreamSnapshot(pathname) {
+    const targets = pathname.includes('alert')
+        ? ["https://www.oref.org.il/warningMessages/alert/Alerts.json", "https://www.oref.org.il/WarningMessages/alert/alerts.json"]
+        : [
+            "https://www.oref.org.il/warningMessages/alert/History/AlertsHistory.json",
+            "https://www.oref.org.il/WarningMessages/History/AlertsHistory.json",
+            "https://www.oref.org.il/WarningMessages/alert/History/AlertsHistory.json"
+        ];
+    // Try each documented path; move on only when Oref answers 404. Any other
+    // status (including 403/5xx) is returned unchanged so errors stay visible.
+    let response = null;
+    let targetIndex = 0;
+    for (let i = 0; i < targets.length; i++) {
+        targetIndex = i;
+        response = await fetch(targets[i], {
+            headers: orefHeaders,
+            cf: { mirage: true, scrapeShield: true } // Cloudflare-specific bypass rules
+        });
+        if (response.status !== 404) break;
+    }
+
+    const body = await response.arrayBuffer();
+    const headers = { ...corsHeaders, 'Content-Type': 'application/json', 'X-Upstream-Status': String(response.status), 'X-Upstream-Target': String(targetIndex) };
+    if (!response.ok) {
+        headers['Cache-Control'] = 'no-store';
+        return { status: response.status, body, headers, cacheable: false };
+    }
+    const text = new TextDecoder().decode(body).replace(/^\ufeff/, '').trim();
+    const quietRollingHistory = response.status === 200 && !text && (pathname === '/api/history' || pathname === '/api2/history');
+    let parsed;
+    try { parsed = quietRollingHistory ? [] : (text ? JSON.parse(text) : null); }
+    catch (err) {
+        headers['Cache-Control'] = 'no-store';
+        return { status: 502, body: new TextEncoder().encode(JSON.stringify({ error: 'Invalid upstream JSON' })).buffer, headers, cacheable: false };
+    }
+    const isAlerts = pathname.includes('alert');
+    const records = Array.isArray(parsed) ? parsed : [parsed];
+    const valid = isAlerts
+        ? (!text || (records.every(item => item && typeof item === 'object' && Array.isArray(item.data) && item.data.every(location => typeof location === 'string'))))
+        : (Array.isArray(parsed) && parsed.every(item => item && typeof item === 'object' && (typeof item.data === 'string' || Array.isArray(item.data)) && typeof item.alertDate === 'string'));
+    if (!valid) {
+        headers['Cache-Control'] = 'no-store';
+        return { status: 502, body: new TextEncoder().encode(JSON.stringify({ error: 'Invalid upstream payload' })).buffer, headers, cacheable: false };
+    }
+    headers['X-Source-Checked-At'] = new Date().toISOString();
+    // Only status-200 snapshots are cacheable: any other 2xx (e.g. 204) passes
+    // through with no-store, so a cache hit can never misreport its status.
+    const cacheable = response.status === 200;
+    headers['Cache-Control'] = cacheable ? EDGE_CACHE_CONTROL : 'no-store';
+    return { status: response.status, body: quietRollingHistory ? EMPTY_JSON_BODY : body, headers, cacheable };
+}
+
 const ALLOWED_ORIGINS = new Set(['https://redmap.me', 'https://redmap.dev']);
 async function withAllowedCors(request, event) {
     const origin = request.headers.get('Origin');
@@ -54,66 +134,28 @@ async function handleRequest(request, event) {
             if (edgeCache) {
                 try {
                     const cached = await edgeCache.match(edgeCacheKey);
-                    if (cached) {
-                        const hitHeaders = new Headers(cached.headers);
-                        hitHeaders.set('X-Cache', 'HIT');
-                        // X-Source-Request-Id is a per-request echo: re-apply it from
-                        // THIS request, never serve the id stored with the cached body.
-                        hitHeaders.delete('X-Source-Request-Id');
-                        const hitRequestId = url.searchParams.get('_source_request');
-                        if (hitRequestId && /^[a-zA-Z0-9-]{16,100}$/.test(hitRequestId)) hitHeaders.set('X-Source-Request-Id', hitRequestId);
-                        // X-Source-Checked-At stays as stored: it is when the upstream
-                        // was actually checked, so clients can see the data's age.
-                        return new Response(cached.body, { status: 200, headers: hitHeaders });
-                    }
-                } catch (cacheErr) { /* a cache failure falls through to a live fetch */ }
-            }
-            const targets = pathname.includes('alert')
-                ? ["https://www.oref.org.il/warningMessages/alert/Alerts.json", "https://www.oref.org.il/WarningMessages/alert/alerts.json"]
-                : [
-                    "https://www.oref.org.il/warningMessages/alert/History/AlertsHistory.json",
-                    "https://www.oref.org.il/WarningMessages/History/AlertsHistory.json",
-                    "https://www.oref.org.il/WarningMessages/alert/History/AlertsHistory.json"
-                ];
-            // Try each documented path; move on only when Oref answers 404. Any other
-            // status (including 403/5xx) is returned unchanged so errors stay visible.
-            let response = null;
-            let targetIndex = 0;
-            for (let i = 0; i < targets.length; i++) {
-                targetIndex = i;
-                response = await fetch(targets[i], {
-                    headers: orefHeaders,
-                    cf: { mirage: true, scrapeShield: true } // Cloudflare-specific bypass rules
-                });
-                if (response.status !== 404) break;
+                    if (cached) return serveSharedSnapshot(cached.status, await cached.arrayBuffer(), cached.headers, url, 'HIT');
+                } catch (cacheErr) {
+                    console.warn('edge cache match failed:', cacheErr);
+                    // a cache failure falls through to a live fetch
+                }
             }
 
-            const body = await response.arrayBuffer();
-            const headers = { ...corsHeaders, 'Content-Type': 'application/json', 'X-Upstream-Status': String(response.status), 'X-Upstream-Target': String(targetIndex), 'X-Cache': 'MISS' };
-            if (!response.ok) {
-                headers['Cache-Control'] = 'no-store';
-                return new Response(body, { status: response.status, headers });
+            let sharedPromise = INFLIGHT_UPSTREAM.get(edgeCacheKey);
+            let originator = false;
+            if (!sharedPromise) {
+                originator = true;
+                sharedPromise = fetchUpstreamSnapshot(pathname);
+                INFLIGHT_UPSTREAM.set(edgeCacheKey, sharedPromise);
             }
-            const text = new TextDecoder().decode(body).replace(/^\ufeff/, '').trim();
-            const quietRollingHistory = response.status === 200 && !text && (pathname === '/api/history' || pathname === '/api2/history');
-            let parsed;
-            try { parsed = quietRollingHistory ? [] : (text ? JSON.parse(text) : null); }
-            catch (err) { headers['Cache-Control'] = 'no-store'; return new Response(JSON.stringify({ error: 'Invalid upstream JSON' }), { status: 502, headers }); }
-            const isAlerts = pathname.includes('alert');
-            const records = Array.isArray(parsed) ? parsed : [parsed];
-            const valid = isAlerts
-                ? (!text || (records.every(item => item && typeof item === 'object' && Array.isArray(item.data) && item.data.every(location => typeof location === 'string'))))
-                : (Array.isArray(parsed) && parsed.every(item => item && typeof item === 'object' && (typeof item.data === 'string' || Array.isArray(item.data)) && typeof item.alertDate === 'string'));
-            if (!valid) { headers['Cache-Control'] = 'no-store'; return new Response(JSON.stringify({ error: 'Invalid upstream payload' }), { status: 502, headers }); }
-            headers['X-Source-Checked-At'] = new Date().toISOString();
-            const requestId = url.searchParams.get('_source_request');
-            if (requestId && /^[a-zA-Z0-9-]{16,100}$/.test(requestId)) headers['X-Source-Request-Id'] = requestId;
-            headers['Cache-Control'] = EDGE_CACHE_CONTROL;
-            const okResponse = new Response(quietRollingHistory ? '[]' : body, { status: response.status, headers });
-            if (edgeCache && event && typeof event.waitUntil === 'function') {
-                event.waitUntil(edgeCache.put(edgeCacheKey, okResponse.clone()));
+            let snapshot;
+            try { snapshot = await sharedPromise; }
+            finally { if (originator) INFLIGHT_UPSTREAM.delete(edgeCacheKey); }
+
+            if (originator && snapshot.cacheable && edgeCache && event && typeof event.waitUntil === 'function') {
+                event.waitUntil(edgeCache.put(edgeCacheKey, new Response(snapshot.body, { status: snapshot.status, headers: snapshot.headers })));
             }
-            return okResponse;
+            return serveSharedSnapshot(snapshot.status, snapshot.body, snapshot.headers, url, originator ? 'MISS' : 'HIT');
         }
 
         return new Response(JSON.stringify({ error: "Not Found: " + pathname }), { status: 404, headers: corsHeaders });
