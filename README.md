@@ -2,6 +2,12 @@
 
 Live map of Israel showing [Pikud HaOref](https://www.oref.org.il) (Home Front Command) alerts as colored area polygons per location. Running at [redmap.me](https://redmap.me).
 
+<table>
+  <tr>
+    <td align="center"><img src="web/about/screenshot-desktop.png" width="480" alt="Desktop view of the live map"/><br/>Desktop</td>
+    <td align="center"><img src="web/about/screenshot-mobile.png" width="200" alt="Mobile view of the live map"/><br/>Mobile</td>
+  </tr>
+</table>
 
 > **Disclaimer:** This is an unofficial civic project. Always follow the official [Home Front Command](https://www.oref.org.il) instructions and do not rely on this app as your only source of alerts.
 
@@ -35,6 +41,8 @@ Enabled from the experimental section of the in-app menu (feature flags):
 - **Launch direction estimation** (כיוון שיגור) - looks at the pattern of alerted zones and draws an indicative ellipse and corridor of where a launch may have come from. This is a rough heuristic visualization only. It is not verified information and must not be relied on for safety decisions.
 - **Driving mode** (מצב נהיגה) - map camera behavior for following your position while driving.
 
+<img src="web/about/prediction-demo.png" width="480" alt="Launch direction estimation drawn on the map - synthetic demo data"/>
+<br/><sub>Launch direction estimation, shown with synthetic demo alerts for illustration.</sub>
 
 ## Development
 
